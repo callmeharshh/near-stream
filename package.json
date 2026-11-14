@@ -6,6 +6,7 @@
     "install:all": "npm --prefix contract install && npm --prefix agent install && npm --prefix frontend install",
     "test": "npm --prefix contract test && npm --prefix agent test",
     "verify": "node scripts/verify-evidence.mjs",
-    "dev": "npm --prefix frontend run dev"
+    "dev": "npm --prefix frontend run dev",
+    "test:browser": "npm --prefix frontend run test:browser"
   }
 }

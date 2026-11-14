@@ -37,6 +37,34 @@ Contract: [`near-stream-contract-1794591135.testnet`](https://explorer.testnet.n
 | `attest` by the verifier (a non-verifier was rejected) | [`BpPdVRPkMw...`](https://explorer.testnet.near.org/transactions/BpPdVRPkMw6CYE5fti6EkJS2PRt5ijtFZCdAwEp46TFy) |
 | `cancel` on a **stalled** stream: receiver got only the frozen 5s amount (0.025 of 0.5 NEAR), sender got 0.475 back, although ~20s of real time had passed with no attestation | [`5wUiwTkQ3e...`](https://explorer.testnet.near.org/transactions/5wUiwTkQ3estn7PpdQbH6aXUu5xTQLjiFogjPJ2X5L98) |
 
+## One complete paid-service loop (stream 16, team-run)
+
+Run by `node scripts/full-loop.mjs`; full record in
+[`evidence/full-loop-testnet.json`](./evidence/full-loop-testnet.json). **Disclosure:**
+the consumer, the operator (who runs the RPC wrapper and receives the money), the
+watchdog and the guardian are all our accounts. The wrapper proxies FastNEAR's public
+testnet RPC; FastNEAR is not a party and was not paid. No external customer.
+
+| What | Evidence |
+|---|---|
+| Consumer opens a 0.3 NEAR / 300s stream to the wrapper's operator, gated on the watchdog | [`5HEGevaLgw...`](https://explorer.testnet.near.org/transactions/5HEGevaLgwSRTRsMrmkBdrWVYV9q8ZvbTnBWrrLRzJGV) |
+| Consumer reads blocks from the wrapper (20 distinct, advancing); operator withdraws 0.045243 NEAR after 40s verified | [`5Eagfpo5QU...`](https://explorer.testnet.near.org/transactions/5Eagfpo5QU8VUpjYdqd8oD4sw5pywbR4Z7HmQhT8PfnZ) |
+| Wrapper goes stale (HTTP 200, one repeated block); verified time stays 64.83s across 15s of stale service | `get_stream` reads |
+| Guardian cancels: operator +0.019589, consumer refund 0.235167 | [`HUeearxMzk...`](https://explorer.testnet.near.org/transactions/HUeearxMzkAGYrq2MMtQuW5GEwNk96NU56zt4Q1CkGeN) |
+| **Reconciled from receipts:** operator 0.064833 NEAR = 64.83s × rate exactly; + refund = the 0.3 NEAR deposit, to the yocto | `npm run verify` |
+
+## Failed native payout (separate test contract, same code)
+
+[`evidence/failed-native-payout-testnet.json`](./evidence/failed-native-payout-testnet.json):
+a stream to an account that didn't exist yet was cancelled → the 0.146666 NEAR refund
+succeeded, the 0.053333 NEAR payout failed and `on_payout` restored it
+([`323MsKeFMR...`](https://explorer.testnet.near.org/transactions/323MsKeFMRrwDKByEgY1top6cYaHahAgzsSBWRe7xcvC));
+after the account was created it withdrew exactly 0.053333 NEAR
+([`6A9Ait6xKM...`](https://explorer.testnet.near.org/transactions/6A9Ait6xKMGd261oDrrBz31eqqegWVfErUbc9PnAFNXm));
+a second withdraw was rejected. The contract balance returned to its exact pre-test
+value. The same build was then deployed to the live testnet contract. **Not deployed
+to mainnet.**
+
 ## Verified-time accounting (stream 12, created after the upgrade)
 
 | What | Evidence |

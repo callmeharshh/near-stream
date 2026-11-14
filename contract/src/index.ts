@@ -225,7 +225,7 @@ class StreamContract {
     return undefined;
   }
 
-  // Retry a token refund to the sender whose ft_transfer failed (e.g. storage unregistered).
+  // Retry a refund to the sender whose payout failed (token storage unregistered, or account gone).
   @call({})
   claim_refund({ stream_id }: { stream_id: number }): NearPromise {
     const stream = this.requireStream(stream_id);
@@ -241,7 +241,7 @@ class StreamContract {
     return this.payout(stream, "sender", amount);
   }
 
-  // Callback after a token ft_transfer. On failure, undo the bookkeeping so the funds
+  // Callback after any payout (native transfer or ft_transfer). On failure, undo the bookkeeping so the funds
   // stay claimable instead of silently disappearing from the stream's accounts.
   @call({ privateFunction: true })
   on_payout({ stream_id, to, amount }: { stream_id: number; to: "receiver" | "sender"; amount: string }): boolean {
@@ -258,7 +258,7 @@ class StreamContract {
         stream.refundOwed = (stream.refundOwed ?? 0n) + value;
       }
       this.streams.set(String(stream_id), stream);
-      near.log(`Stream ${stream_id}: token payout of ${amount} to ${to} failed; restored so it can be claimed again`);
+      near.log(`Stream ${stream_id}: payout of ${amount} to ${to} failed; restored so it can be claimed again`);
       return false;
     }
   }
@@ -278,12 +278,12 @@ class StreamContract {
 
   private payout(stream: Stream, to: "receiver" | "sender", amount: bigint): NearPromise {
     const accountId = to === "receiver" ? stream.receiver : stream.sender;
-    if (!stream.token) {
-      return NearPromise.new(accountId).transfer(amount);
-    }
-    return NearPromise.new(stream.token)
-      .functionCall("ft_transfer", JSON.stringify({ receiver_id: accountId, amount: amount.toString() }), ONE_YOCTO, FT_TRANSFER_GAS)
-      .then(
+    // A native transfer to a nonexistent account fails and NEAR returns the coins to this
+    // contract, so native payouts need the same rollback callback as token payouts.
+    const transfer = stream.token
+      ? NearPromise.new(stream.token).functionCall("ft_transfer", JSON.stringify({ receiver_id: accountId, amount: amount.toString() }), ONE_YOCTO, FT_TRANSFER_GAS)
+      : NearPromise.new(accountId).transfer(amount);
+    return transfer.then(
         NearPromise.new(near.currentAccountId()).functionCall(
           "on_payout",
           JSON.stringify({ stream_id: stream.id, to, amount: amount.toString() }),

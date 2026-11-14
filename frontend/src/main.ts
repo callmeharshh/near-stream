@@ -23,7 +23,13 @@ let streams: RawStream[] = [];
 let statusMessage = "";
 let busyStreamId: number | null = null;
 const tokenMeta = new Map<string, TokenMeta>();
-const TOKEN_GAS = 150_000_000_000_000n; // ft_transfer + rollback callback per payout
+const PAYOUT_GAS = 150_000_000_000_000n; // up to two payouts, each with a rollback callback
+
+// Every string from the chain (account ids, token ids, token metadata) or from errors is
+// attacker-controlled: anyone can create a stream naming any "receiver" string.
+function esc(value: unknown): string {
+  return String(value).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+}
 
 function near(amountYocto: string): string {
   return `${formatNearAmount(amountYocto, 6)} NEAR`;
@@ -43,11 +49,11 @@ function parseUnits(amount: string, decimals: number): string | null {
   return (BigInt(whole) * 10n ** BigInt(decimals) + BigInt(frac.padEnd(decimals, "0") || "0")).toString();
 }
 
-// Amount in the stream's own unit: NEAR, or the token's symbol/decimals.
+// Amount in the stream's own unit: NEAR, or the token's symbol/decimals. Returns escaped HTML.
 function money(stream: RawStream, amount: string): string {
   if (!stream.token) return near(amount);
   const meta = tokenMeta.get(stream.token);
-  return meta ? `${formatUnits(amount, meta.decimals)} ${meta.symbol}` : `${amount} (${stream.token})`;
+  return esc(meta ? `${formatUnits(amount, meta.decimals)} ${meta.symbol}` : `${amount} (${stream.token})`);
 }
 
 function verifiersOf(stream: RawStream): string[] {
@@ -110,7 +116,7 @@ function heartbeatReadout(stream: RawStream, stalled: boolean): string {
       ? `<strong>Payout frozen</strong> — no attestation for ${sinceAttest}s (window ${window}s). This unverified time will never be paid; payout resumes from the next attestation.`
       : `<strong>Payout frozen</strong> — no attestation for ${sinceAttest}s (window ${window}s). The sender can cancel at the frozen amount; the next attestation releases the real elapsed amount.`
     : `Last attestation ${sinceAttest}s ago · payout freezes in <strong>${window - sinceAttest}s</strong> unless ${
-        verifiersOf(stream).length > 1 ? `${stream.threshold} of ${verifiersOf(stream).length} verifiers attest` : "the verifier attests"
+        verifiersOf(stream).length > 1 ? `${esc(stream.threshold)} of ${verifiersOf(stream).length} verifiers attest` : "the verifier attests"
       } again.`;
   return `<p class="hint guard-hint ${stalled ? "frozen" : ""}">${detail}</p>`;
 }
@@ -121,23 +127,24 @@ function streamCard(stream: RawStream): string {
   const youAreVerifier = accountId !== null && verifiersOf(stream).includes(accountId);
   const withdrawable = withdrawableNow(stream);
   const busy = busyStreamId === stream.id;
+  const id = Number(stream.id);
   const guarded = heartbeatOf(stream) !== null;
   const stalled = guarded && !stream.closed && isStalled(stream);
 
   const actions: string[] = [];
   if (youAreReceiver && withdrawable > 0n) {
     actions.push(
-      `<button data-action="withdraw" data-id="${stream.id}" ${busy ? "disabled" : ""}>Withdraw ${money(stream, withdrawable.toString())}</button>`,
+      `<button data-action="withdraw" data-id="${id}" ${busy ? "disabled" : ""}>Withdraw ${money(stream, withdrawable.toString())}</button>`,
     );
   }
   if (youAreSender && BigInt(stream.refundOwed ?? "0") > 0n) {
-    actions.push(`<button data-action="claim_refund" data-id="${stream.id}" ${busy ? "disabled" : ""}>Claim ${money(stream, stream.refundOwed!)} refund</button>`);
+    actions.push(`<button data-action="claim_refund" data-id="${id}" ${busy ? "disabled" : ""}>Claim ${money(stream, stream.refundOwed!)} refund</button>`);
   }
   if (youAreSender && !stream.closed) {
-    actions.push(`<button data-action="cancel" data-id="${stream.id}" class="secondary" ${busy ? "disabled" : ""}>Cancel &amp; refund remainder</button>`);
+    actions.push(`<button data-action="cancel" data-id="${id}" class="secondary" ${busy ? "disabled" : ""}>Cancel &amp; refund remainder</button>`);
   }
   if (youAreVerifier && !stream.closed) {
-    actions.push(`<button data-action="attest" data-id="${stream.id}" ${busy ? "disabled" : ""}>Attest (keep streaming)</button>`);
+    actions.push(`<button data-action="attest" data-id="${id}" ${busy ? "disabled" : ""}>Attest (keep streaming)</button>`);
   }
 
   let statusBadge: string;
@@ -154,17 +161,17 @@ function streamCard(stream: RawStream): string {
   return `
     <article class="stream-card ${stream.closed ? "closed" : ""}">
       <header>
-        <span class="stream-id">Stream #${stream.id}</span>
+        <span class="stream-id">Stream #${id}</span>
         ${statusBadge}
       </header>
       <div class="parties">
-        <div><label>From</label><span>${stream.sender}</span></div>
-        <div><label>To</label><span>${stream.receiver}</span></div>
+        <div><label>From</label><span>${esc(stream.sender)}</span></div>
+        <div><label>To</label><span>${esc(stream.receiver)}</span></div>
         ${
           guarded
             ? verifiersOf(stream).length > 1
-              ? `<div class="wide"><label>Verifiers — ${stream.threshold} of ${verifiersOf(stream).length} must attest</label><span>${verifiersOf(stream).join("<br>")}</span></div>`
-              : `<div><label>Verifier</label><span>${verifiersOf(stream)[0]}</span></div>`
+              ? `<div class="wide"><label>Verifiers — ${esc(stream.threshold)} of ${verifiersOf(stream).length} must attest</label><span>${verifiersOf(stream).map(esc).join("<br>")}</span></div>`
+              : `<div><label>Verifier</label><span>${esc(verifiersOf(stream)[0])}</span></div>`
             : ""
         }
       </div>
@@ -181,7 +188,9 @@ function streamCard(stream: RawStream): string {
   `;
 }
 
-function render() {
+// The page shell (header, form) is built only when the account changes, so typing in the
+// form survives the 1s live tick; render() refreshes just the status line and stream list.
+function renderShell() {
   app.innerHTML = `
     <div class="page">
       <header class="topbar">
@@ -189,7 +198,7 @@ function render() {
         ${
           accountId
             ? `<div class="account">
-                 <span>${accountId}</span>
+                 <span>${esc(accountId)}</span>
                  <button id="sign-out" class="secondary">Disconnect</button>
                </div>`
             : `<button id="connect">Connect wallet</button>`
@@ -218,9 +227,7 @@ function render() {
         </p>
       </section>
 
-      ${
-        accountId
-          ? `<section class="card">
+      <section class="card">
                <h2>Start a new stream</h2>
                <form id="create-form">
                  <label>Receiver account id
@@ -247,17 +254,15 @@ function render() {
                      <input name="heartbeat" type="number" step="1" min="1" placeholder="e.g. 300" />
                    </label>
                  </fieldset>
-                 <button type="submit">Create stream</button>
+                 <button type="submit">${accountId ? "Create stream" : "Connect wallet to create"}</button>
                </form>
-             </section>`
-          : `<p class="hint">Connect a wallet above to start or receive a stream.</p>`
-      }
+             </section>
 
-      ${statusMessage ? `<p class="status">${statusMessage}</p>` : ""}
+      <div id="status"></div>
 
       <section class="streams">
         <h2>Streams</h2>
-        ${streams.length ? streams.map(streamCard).join("") : '<p class="hint">No streams yet.</p>'}
+        <div id="stream-list"></div>
       </section>
     </div>
   `;
@@ -266,16 +271,26 @@ function render() {
   document.querySelector("#sign-out")?.addEventListener("click", async () => {
     await signOut();
     accountId = null;
-    render();
+    renderShell();
   });
   document.querySelector("#create-form")?.addEventListener("submit", onCreateStream);
-  document.querySelectorAll<HTMLButtonElement>("[data-action]").forEach((button) => {
-    button.addEventListener("click", () => onStreamAction(button.dataset.action!, Number(button.dataset.id)));
+  document.querySelector("#stream-list")!.addEventListener("click", (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-action]");
+    if (button && !button.disabled) onStreamAction(button.dataset.action!, Number(button.dataset.id));
   });
+  render();
+}
+
+function render() {
+  document.querySelector("#status")!.innerHTML = statusMessage ? `<p class="status">${esc(statusMessage)}</p>` : "";
+  document.querySelector("#stream-list")!.innerHTML = streams.length
+    ? streams.map(streamCard).join("")
+    : '<p class="hint">No streams yet.</p>';
 }
 
 async function onCreateStream(event: Event) {
   event.preventDefault();
+  if (!accountId) return showWalletModal();
   const form = event.target as HTMLFormElement;
   const data = new FormData(form);
   const receiver = String(data.get("receiver")).trim();
@@ -354,8 +369,7 @@ async function onStreamAction(action: string, streamId: number) {
   statusMessage = "Confirm the transaction in your wallet…";
   render();
   try {
-    const isToken = Boolean(streams.find((s) => s.id === streamId)?.token);
-    await callChange(action, { stream_id: streamId }, "0", isToken && action !== "attest" ? { gas: TOKEN_GAS } : {});
+    await callChange(action, { stream_id: streamId }, "0", action !== "attest" ? { gas: PAYOUT_GAS } : {});
     const labels: Record<string, string> = { withdraw: "Withdrawal", cancel: "Cancellation", attest: "Attestation", claim_refund: "Refund" };
     statusMessage = `${labels[action] ?? "Action"} confirmed.`;
     await refreshStreams();
@@ -384,8 +398,9 @@ async function boot() {
   accountId = await getActiveAccountId();
   onAccountChange((next) => {
     accountId = next;
-    render();
+    renderShell();
   });
+  renderShell();
   await refreshStreams();
   render();
 

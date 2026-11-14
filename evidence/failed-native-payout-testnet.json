@@ -1,0 +1,33 @@
+{
+  "what": "A native-NEAR payout to an account that does not exist fails; the receiver share must stay claimable, not be lost.",
+  "network": "testnet",
+  "contract": "ns-payout-1794690507.testnet",
+  "receiver": "ns-ghost-1794690532.testnet",
+  "sender": "near-stream-sender-1794591135.testnet",
+  "steps": [
+    {
+      "step": "create_stream 0.2 NEAR over 60s to a receiver account that does not exist yet",
+      "tx": "AvLUox2KeheZXx6SWqN7FpmhFi8m5YLXLo7vxsutqUfU"
+    },
+    {
+      "step": "sender cancels after ~12s: refund 0.146666… NEAR to sender succeeds; payout 0.053333… NEAR to receiver fails; on_payout restores withdrawn=0",
+      "tx": "323MsKeFMRrwDKByEgY1top6cYaHahAgzsSBWRe7xcvC"
+    },
+    {
+      "step": "receiver account created, then withdraw pays exactly the restored 0.053333… NEAR",
+      "tx": "6A9Ait6xKMGd261oDrrBz31eqqegWVfErUbc9PnAFNXm"
+    },
+    {
+      "step": "second withdraw rejected: Nothing available to withdraw yet"
+    }
+  ],
+  "reconciliation": {
+    "totalYocto": "200000000000000000000000",
+    "refundedYocto": "146666666666666666666667",
+    "paidReceiverYocto": "53333333333333333333333",
+    "contractBalanceAfterDeploy": "9.9959688357764272 NEAR",
+    "contractBalanceAfterFailedPayout": "10.049302169109760533333333 NEAR",
+    "contractBalanceAfterClaim": "9.9959688357764272 NEAR"
+  },
+  "mainnet": "Not upgraded. The mainnet Rust contract (v1) still pays native NEAR with a plain transfer; see README limitations."
+}

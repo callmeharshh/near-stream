@@ -1,0 +1,86 @@
+{
+  "disclosure": "Team-run demonstration. Consumer, operator, watchdog and guardian accounts are all controlled by the NEAR Stream team. The wrapper proxies FastNEAR's public testnet RPC; FastNEAR was not paid and is not a party. No external customer.",
+  "network": "testnet",
+  "contract": "near-stream-contract-1794591135.testnet",
+  "streamId": 16,
+  "roles": {
+    "consumer": "near-stream-sender-1794591135.testnet",
+    "operator": "near-stream-receiver-1794591135.testnet",
+    "watchdog": "near-stream-verifier-1794591135.testnet",
+    "guardianSignsAs": "near-stream-sender-1794591135.testnet",
+    "wrapper": "http://localhost:8788/work"
+  },
+  "txs": {
+    "create": "5HEGevaLgwSRTRsMrmkBdrWVYV9q8ZvbTnBWrrLRzJGV",
+    "operatorWithdraw": "5Eagfpo5QU8VUpjYdqd8oD4sw5pywbR4Z7HmQhT8PfnZ",
+    "guardianCancel": "HUeearxMzkAGYrq2MMtQuW5GEwNk96NU56zt4Q1CkGeN"
+  },
+  "verifiedSeconds": {
+    "atWithdraw": 40.006548941,
+    "stallPlus25s": 64.832549873,
+    "stallPlus40s": 64.832549873,
+    "final": 64.832549873
+  },
+  "money": {
+    "deposit": "0.300000 NEAR",
+    "paidToOperator": "0.064833 NEAR",
+    "refundedToConsumer": "0.235167 NEAR",
+    "yocto": {
+      "deposit": "300000000000000000000000",
+      "paidToOperator": "64832549873000000000000",
+      "refundedToConsumer": "235167450127000000000000"
+    }
+  },
+  "transfers": [
+    {
+      "to": "near-stream-receiver-1794591135.testnet",
+      "yocto": "45243111731000000000000",
+      "succeeded": true
+    },
+    {
+      "to": "near-stream-sender-1794591135.testnet",
+      "yocto": "235167450127000000000000",
+      "succeeded": true
+    },
+    {
+      "to": "near-stream-receiver-1794591135.testnet",
+      "yocto": "19589438142000000000000",
+      "succeeded": true
+    }
+  ],
+  "consumer": {
+    "requests": 38,
+    "distinctBlocksBeforeStall": 20,
+    "distinctBlocksAfterStall": 1,
+    "stalledAtS": 68.941
+  },
+  "checks": {
+    "consumer read fresh, advancing blocks from the wrapper while healthy": true,
+    "consumer got only stale data after the stall": true,
+    "operator earned and withdrew during healthy service": true,
+    "no new credit while the service was stale": true,
+    "all payouts succeeded (no rollback)": true,
+    "operator was paid exactly the verified time": true,
+    "paid to operator + refunded to consumer = deposit": true
+  },
+  "logs": {
+    "worker": [
+      "service: serving live NEAR block data from https://test.rpc.fastnear.com on http://localhost:8788/work",
+      "service: now STALLED (still answering HTTP 200)"
+    ],
+    "watchdog": [
+      "21:15:48  ✗ not attesting: no progress since last check",
+      "21:15:53  ✗ not attesting: no progress since last check",
+      "21:15:59  ✗ not attesting: no progress since last check",
+      "21:16:03  ✗ not attesting: no progress since last check",
+      "21:16:09  ✗ not attesting: no progress since last check",
+      "21:16:14  ✗ not attesting: no progress since last check",
+      "21:16:19  ✗ not attesting: no progress since last check",
+      "21:16:23  ✗ not attesting: no progress since last check"
+    ],
+    "guardian": [
+      "guardian: protecting streams sent by near-stream-sender-1794591135.testnet; cancels after 5s frozen",
+      "21:16:20  ✓ cancelled stream 16 after 20s frozen; unverified funds returned  tx HUeearxMzkAGYrq2MMtQuW5GEwNk96NU56zt4Q1CkGeN"
+    ]
+  }
+}

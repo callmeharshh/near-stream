@@ -9,8 +9,8 @@ Autonomous Business, AI Security & Defense · **Live on NEAR mainnet** (real NEA
 |---|---|
 | **Mainnet contract** | [`85401b22…5d98`](https://explorer.near.org/accounts/85401b220a3d58edb6f98a7ddbc48598ee373314ae17ae1399f7cf2462c45d98): full agent flow ran with real NEAR ([transactions](./EVIDENCE.md#near-mainnet-real-near)) |
 | Live app (testnet, no install) | https://callmeharshh.github.io/near-stream/ |
-| Verify every on-chain claim (read-only) | `npm run verify` → **33/33 PASS** (incl. 5 mainnet checks) ([what it checks](./EVIDENCE.md)) |
-| Tests | `npm run install:all && npm test` → **31 passing** (+5 Rust: `cd contract-rs && cargo test`) |
+| Verify every on-chain claim (read-only) | `npm run verify` → **35/35 PASS** (incl. 5 mainnet checks) ([what it checks](./EVIDENCE.md)) |
+| Tests | `npm run install:all && npm test` → **31 passing** (+2 browser: `npm --prefix frontend run test:browser`, +5 Rust: `cd contract-rs && cargo test`) |
 | All transactions | [`EVIDENCE.md`](./EVIDENCE.md) |
 | Design decisions & gotchas | [`DECISIONS.md`](./DECISIONS.md) |
 
@@ -60,6 +60,7 @@ Re-checked by `npm run verify`. Full transaction list in [`EVIDENCE.md`](./EVIDE
 | Feature | Proof |
 |---|---|
 | **The whole loop on mainnet, with real NEAR** | watchdog verified real mainnet blocks and attested with its attest-only key → service stalled → guardian auto-cancelled with its cancel-only key; 120s wall-clock, 44.7s verified, only verified time paid; both keys' theft attempts rejected by mainnet |
+| **One complete paid-service loop (team-run, testnet)** | stream 16: a consumer read block data from the RPC wrapper and paid its operator; healthy service earned 40s and the operator withdrew mid-stream; the wrapper went stale → credit froze (64.8s before and 15s later); guardian cancelled. From receipts: operator paid 0.064833 NEAR = exactly the verified time, consumer refunded 0.235167, sum = the 0.3 deposit. `node scripts/full-loop.mjs` |
 | Per-second streams: create, withdraw, cancel | balances reconciled across contract, sender, receiver |
 | **Only verified time is paid** | stream 12: 166s of wall-clock time, 64.1s verified → provider paid 0.0641 NEAR; a 45s outage and the pre-attestation start were excluded (the old clock model would have paid ~0.166) |
 | Real service, checked for correctness | watchdog verified live NEAR blocks against a reference RPC; rejected stale data, a forged block hash, and future timestamps |
@@ -70,7 +71,8 @@ Re-checked by `npm run verify`. Full transaction list in [`EVIDENCE.md`](./EVIDE
 | Guardian auto-cancel | cancelled a frozen stream with no human; refund returned to payer |
 | Scoped agent keys | both agents' keys were rejected by the protocol when trying to transfer funds or call other methods |
 | NEP-141 token streams | wNEAR stream: withdraw + guardian cancel; payouts sum to exactly the stream total |
-| Failed token payouts roll back | payout to an unregistered receiver failed, stayed claimable, succeeded after registration |
+| Failed payouts roll back (token and native NEAR) | token: payout to an unregistered receiver failed, stayed claimable, succeeded after registration. Native: a cancel's payout to a not-yet-existing account failed, the refund still went through, the 0.0533 NEAR stayed claimable and was withdrawn in full once the account existed ([evidence](./evidence/failed-native-payout-testnet.json)) |
+| Hostile on-chain strings can't run in the app | anyone can name any "receiver" string, and any token can return any `symbol`; the app escapes all of them, and typing in the form survives the live refresh. Browser tests feed it hostile streams |
 
 ## What exactly is guaranteed
 
@@ -111,7 +113,7 @@ intervals and/or larger streams. Who pays the watchdogs is on the roadmap.
 | Smart contract (near-sdk-js → WASM) | `contract/src/index.ts` | holds funds; accrual, freeze, k-of-n, cancel |
 | Function-call access keys | `agent/watchdog.mjs`, `agent/guardian.mjs`, `scripts/mainnet-setup.mjs` | single-method, single-contract agent keys |
 | NEP-141 fungible tokens | `ft_on_transfer` / `ft_transfer` in the contract | streams in USDC-standard tokens |
-| Cross-contract promises + callback | `payout` / `on_payout` in the contract | token payouts with rollback on failure |
+| Cross-contract promises + callback | `payout` / `on_payout` in the contract | every payout (token or native) rolls back on failure |
 | NEAR Wallet Selector (Bitte, HERE, Meteor) | `frontend/src/near.ts` | signing in the web app |
 | near-api-js + FastNEAR RPC | `frontend/`, `agent/`, `scripts/` | reads and transactions |
 
@@ -144,7 +146,8 @@ fit on the payer's side (funding streams from an Agent API wallet); that is **no
 ```bash
 npm run install:all
 npm test          # 31 unit tests (verified-time accounting, k-of-n, delivery check, agents)
-npm run verify    # re-checks 33 on-chain claims (testnet + mainnet), read-only
+npm --prefix frontend run test:browser   # 2 browser regressions (hostile chain data, form input)
+npm run verify    # re-checks 35 on-chain claims (testnet + mainnet), read-only
 node scripts/gas-report.mjs   # mainnet gas per action, from transaction receipts
 ```
 Or open the [live app](https://callmeharshh.github.io/near-stream/): it reads the
@@ -170,7 +173,7 @@ agent/      watchdog.mjs  verifies a service, attests (attest-only key)
             worker.mjs    the paid service: serves live NEAR block data; POST /stall, /tamper, /resume
             check.mjs     the delivery check + guardian rule (no LLM; unit-tested)
 frontend/   web app (Vite + TypeScript), reads the contract directly; no backend
-scripts/    verify-evidence.mjs (read-only verifier), mainnet-setup.mjs (deploy script)
+scripts/    verify-evidence.mjs (read-only verifier), full-loop.mjs (end-to-end paid loop), mainnet-setup.mjs (deploy script)
 ```
 
 ## Honest limitations
@@ -186,9 +189,15 @@ scripts/    verify-evidence.mjs (read-only verifier), mainnet-setup.mjs (deploy 
   machine operated by us, and every reference RPC is a FastNEAR endpoint (separate
   endpoint, same company). The 2-of-3 logic is proven on-chain, including against a
   dishonest watchdog; truly separate operators and providers are not.
-- **No full commercial flow:** the paid service is a real public data provider, but its
-  operator isn't the stream's receiver, and no app consumes the data. Stablecoin flow
-  is shown with wNEAR (NEP-141) on testnet, not USDC; no agent-driven purchase is shown.
+- **The commercial loop is team-run, not a real customer.** In stream 16 the consumer,
+  the operator (receiver) of the RPC wrapper, the watchdog and the guardian are all our
+  accounts. The wrapper proxies FastNEAR's public testnet RPC; FastNEAR is not a party
+  and was not paid. Stablecoin flow is shown with wNEAR (NEP-141) on testnet, not USDC.
+- **The mainnet contract does not have the native-payout rollback.** A native payout to
+  an account that doesn't exist fails; on testnet the funds now stay claimable (proven
+  on chain). The mainnet Rust contract is unchanged on purpose (no untested mainnet
+  upgrade before the deadline), so there a payout to a nonexistent receiver would leave
+  the funds in the contract, unassigned. The mainnet receiver was an existing account.
 - **Sampled, not continuous:** see *What exactly is guaranteed*.
 - **Streams 0–11 on testnet use the earlier clock-based model** (an outage was paid
   after recovery). Verified-time accounting applies to streams created after the

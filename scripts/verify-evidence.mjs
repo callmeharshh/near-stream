@@ -284,6 +284,39 @@ check("MAINNET: stream 0 paid only verified time (outage excluded), then was clo
   return s.closed && verified + 30_000_000_000n < wall && BigInt(s.withdrawn) === expected;
 });
 
+// Native transfers a contract sent within a transaction, with each receipt's success.
+async function contractTransfers(hash, signer, contract) {
+  const t = await rpc("EXPERIMENTAL_tx_status", { tx_hash: hash, sender_account_id: signer, wait_until: "NONE" });
+  const ok = new Map(t.receipts_outcome.map((o) => [o.id, "SuccessValue" in o.outcome.status || "SuccessReceiptId" in o.outcome.status]));
+  const logs = t.receipts_outcome.flatMap((o) => o.outcome.logs);
+  const transfers = t.receipts
+    .filter((r) => r.predecessor_id === contract)
+    .flatMap((r) => (r.receipt.Action?.actions ?? []).filter((a) => a.Transfer).map((a) => ({ to: r.receiver_id, yocto: BigInt(a.Transfer.deposit), ok: ok.get(r.receipt_id) })));
+  return { transfers, logs };
+}
+
+const LOOP = JSON.parse(readFile(new URL("../evidence/full-loop-testnet.json", import.meta.url), "utf8"));
+check(`full loop (stream ${LOOP.streamId}): operator paid exactly verified time, + consumer refund = deposit, from receipts`, async () => {
+  const s = await view("get_stream", { stream_id: LOOP.streamId });
+  const w = await contractTransfers(LOOP.txs.operatorWithdraw, RECEIVER, CONTRACT);
+  const c = await contractTransfers(LOOP.txs.guardianCancel, SENDER, CONTRACT);
+  const all = [...w.transfers, ...c.transfers];
+  const sum = (to) => all.filter((t) => t.to === to && t.ok).reduce((a, t) => a + t.yocto, 0n);
+  const owed = (BigInt(s.totalAmount) * BigInt(s.verifiedNanos)) / (BigInt(s.durationSeconds) * 1_000_000_000n);
+  return s.closed && all.every((t) => t.ok) && sum(RECEIVER) === owed && sum(RECEIVER) === BigInt(s.withdrawn) && sum(RECEIVER) + sum(SENDER) === BigInt(s.totalAmount);
+});
+
+const PAYOUT = JSON.parse(readFile(new URL("../evidence/failed-native-payout-testnet.json", import.meta.url), "utf8"));
+check("failed native payout: transfer to a nonexistent receiver failed, was restored, then claimed in full", async () => {
+  const cancel = await contractTransfers(PAYOUT.steps[1].tx, PAYOUT.sender, PAYOUT.contract);
+  const claim = await contractTransfers(PAYOUT.steps[2].tx, PAYOUT.receiver, PAYOUT.contract);
+  const failedToReceiver = cancel.transfers.find((t) => t.to === PAYOUT.receiver && !t.ok);
+  const refund = cancel.transfers.find((t) => t.to === PAYOUT.sender && t.ok);
+  const claimed = claim.transfers.find((t) => t.to === PAYOUT.receiver && t.ok);
+  return Boolean(failedToReceiver && refund && claimed) && cancel.logs.some((l) => l.includes("restored")) &&
+    claimed.yocto === failedToReceiver.yocto && claimed.yocto + refund.yocto === BigInt(PAYOUT.reconciliation.totalYocto);
+});
+
 let failed = 0;
 for (const { name, fn } of checks) {
   let ok = false;

@@ -51,9 +51,8 @@ async function tick() {
         contractId: CONTRACT_ID,
         methodName: "cancel",
         args: { stream_id: stream.id },
-        // cancel schedules payout receipts (measured 38.8 Tgas total for native NEAR);
-        // token streams add an ft_transfer + rollback callback per party
-        gas: stream.token ? 150_000_000_000_000n : 100_000_000_000_000n,
+        // cancel schedules up to two payouts, each with a rollback callback; unused gas is refunded
+        gas: 150_000_000_000_000n,
       });
       const hash = outcome?.transaction_outcome?.id ?? outcome?.transaction?.hash ?? "?";
       console.log(`${time()}  ✓ cancelled stream ${stream.id} after ${decision.frozenForS}s frozen; unverified funds returned  tx ${hash}`);

@@ -1,6 +1,21 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { checkDelivery, shouldCancel } from "./check.mjs";
+import { checkDelivery, shouldCancel, classifyError, nextDelayMs } from "./check.mjs";
+
+test("agent errors: closed/missing streams and permission errors are permanent; RPC errors are transient", () => {
+  assert.equal(classifyError("Smart contract panicked: Stream already closed"), "permanent");
+  assert.equal(classifyError("Smart contract panicked: Stream 4 does not exist"), "permanent");
+  assert.equal(classifyError("Only the configured verifier can attest to this stream"), "permanent");
+  assert.equal(classifyError("429 Too Many Requests"), "transient");
+  assert.equal(classifyError("fetch failed"), "transient");
+});
+
+test("agent backoff: doubles per consecutive failure, capped at 60s, normal after success", () => {
+  assert.equal(nextDelayMs(5000, 0), 5000);
+  assert.equal(nextDelayMs(5000, 1), 10_000);
+  assert.equal(nextDelayMs(5000, 3), 40_000);
+  assert.equal(nextDelayMs(5000, 10), 60_000);
+});
 
 const ms = (iso) => Date.parse(iso);
 const nanos = (iso) => (BigInt(ms(iso)) * 1_000_000n).toString();

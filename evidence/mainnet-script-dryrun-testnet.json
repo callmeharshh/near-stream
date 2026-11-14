@@ -1,0 +1,72 @@
+{
+  "network": "testnet",
+  "accounts": {
+    "contract": "02d82036ca73160376bcbd99d0b54b8d14591a7e35cee6d3bbf8c7e58396d5ec",
+    "sender": "52ae1a19fe7eab656175ee6c044e58b30874016e997086da010bb2b789f454a0",
+    "receiver": "b0beca9bdea58a4987d504fb37018c8687b507e4a16d5ca4992355b2d3283990",
+    "verifier": "135358f85266e0c82b7f7963513ee6f7ad995a0ea0197e74099fdad894d11c4a"
+  },
+  "watchdogKey": "ed25519:2izUtyTy6PNXNS4q2TTyNU74mLzFrJNTRTKfXvR8a2mC",
+  "steps": [
+    {
+      "at": "2026-11-14T15:10:41.220Z",
+      "step": "fund sender with 0.15 NEAR",
+      "tx": "8Hh9qMxmNuqpUdeipdcaMPyjbYPQkwQArs1G4hxJFrWk"
+    },
+    {
+      "at": "2026-11-14T15:10:43.502Z",
+      "step": "fund verifier with 0.08 NEAR",
+      "tx": "DjP4SX68ktmcs91JfPQmxopngospi6NCeQB7XMovKMqR"
+    },
+    {
+      "at": "2026-11-14T15:10:46.507Z",
+      "step": "fund receiver with 0.01 NEAR",
+      "tx": "2uDVqh6gG6sqSsX3kdRc3ohCGCwnmPuVfVm98qTVL86Z"
+    },
+    {
+      "at": "2026-11-14T15:10:50.234Z",
+      "step": "deploy contract",
+      "tx": "7fy3pWQdcHDjorwMUck6wxi2h6tDHHtn7X4N9DSA7m5d"
+    },
+    {
+      "at": "2026-11-14T15:10:51.977Z",
+      "step": "register attest-only watchdog key on verifier",
+      "tx": "8fZHuvtfYMd2XMGzQ9V8ffcV5CfqmSEnwUDSBzSF2mMg"
+    },
+    {
+      "at": "2026-11-14T15:10:54.438Z",
+      "step": "create_stream 0.05 NEAR / 1h, verifier-gated, 20s heartbeat",
+      "tx": "HnxKm6uGpXk77QcQ4ZFDfAscuXumomPBmLp6vgLxNDXN"
+    },
+    {
+      "step": "watchdog attest via scoped key (fresh work #1)",
+      "tx": "3sP1BvQeXNs7gyHzdWu8NanUck1xZQUtX1LuWR9uftRZ"
+    },
+    {
+      "step": "watchdog attest via scoped key (fresh work #4)",
+      "tx": "68YNhSRFdBsEsPmL1tqdPbGdGPJ7Chybno6N6Z7AZDZQ"
+    },
+    {
+      "step": "watchdog attest via scoped key (fresh work #6)",
+      "tx": "CUkJGaCR6AQWfute8muRCg8ZMviaGuDVrHv4zSTyTE3S"
+    },
+    {
+      "step": "watchdog attest via scoped key (fresh work #9)",
+      "tx": "HQcHNY6BqCs8M9YU1AADJWYN15k5y5qaZdUSwYhGHip6"
+    },
+    {
+      "step": "watchdog attest via scoped key (fresh work #11)",
+      "tx": "A1JQrpH56fVVNgpZLDz234GcPS3T3VVojuFexzqctWji"
+    },
+    {
+      "step": "watchdog attest via scoped key (fresh work #13)",
+      "tx": "DEhKFBug5UbxCHBWomunZiR6jL9E4PYnMyzah45e1Svy"
+    },
+    {
+      "at": "2026-11-14T15:12:07.557Z",
+      "step": "cancel stream 0 while stalled",
+      "tx": "2S8Z6bfNkwcePa45iEuZooTbMVfyvYyqs2RG8dQCUk7V"
+    }
+  ],
+  "note": "DRY_RUN=1 run of scripts/mainnet-setup.mjs: the identical mainnet flow (implicit accounts, deploy, scoped keys, stream, watchdog, cancel) broadcast to NEAR testnet."
+}

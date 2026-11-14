@@ -134,6 +134,28 @@ check("2-of-3: a lone watchdog's successful attest did NOT keep stream 9 paid (e
   return succeeded(t) && t.transaction.actions[0]?.FunctionCall?.method_name === "attest" && deadlineNs < attestedAtNs;
 });
 
+check("mainnet deploy script's DRY_RUN on testnet: every recorded tx succeeded (evidence/mainnet-script-dryrun-testnet.json)", async () => {
+  const { readFileSync } = await import("node:fs");
+  const file = new URL("../evidence/mainnet-script-dryrun-testnet.json", import.meta.url);
+  const dry = JSON.parse(readFileSync(file, "utf8"));
+  const signers = Object.values(dry.accounts);
+  for (const { tx: hash } of dry.steps) {
+    let found = false;
+    for (const sender of signers) {
+      try {
+        if (succeeded(await tx(hash, sender))) {
+          found = true;
+          break;
+        }
+      } catch {
+        // wrong sender for this tx; try the next one
+      }
+    }
+    if (!found) return false;
+  }
+  return dry.steps.length > 0;
+});
+
 check("ungated live stream 6 accrues in real time (two reads 4s apart)", async () => {
   const a = BigInt((await view("get_stream", { stream_id: 6 })).withdrawable);
   await sleep(4000);

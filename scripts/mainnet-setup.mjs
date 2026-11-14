@@ -67,7 +67,7 @@ async function balance(accountId) {
 }
 
 function record(entry) {
-  const log = existsSync(EVIDENCE) ? JSON.parse(readFileSync(EVIDENCE, "utf8")) : { network: "mainnet", steps: [] };
+  const log = existsSync(EVIDENCE) ? JSON.parse(readFileSync(EVIDENCE, "utf8")) : { network: DRY_RUN ? "testnet" : "mainnet", steps: [] };
   log.steps.push({ at: new Date().toISOString(), ...entry });
   writeFileSync(EVIDENCE, JSON.stringify(log, null, 2));
   console.log(`  ✓ ${entry.step}  ${entry.tx ?? ""}`);
@@ -89,7 +89,7 @@ if (command === "keys") {
   }
   const contract = accountOf(keys.contract);
   const ids = Object.fromEntries(Object.entries(keys).map(([r, k]) => [r, k.accountId]));
-  writeFileSync(EVIDENCE, JSON.stringify({ network: "mainnet", accounts: ids, watchdogKey: keys.watchdog.publicKey, steps: [] }, null, 2));
+  writeFileSync(EVIDENCE, JSON.stringify({ network: DRY_RUN ? "testnet" : "mainnet", accounts: ids, watchdogKey: keys.watchdog.publicKey, steps: [] }, null, 2));
 
   for (const [role, near] of [["sender", "0.15"], ["verifier", "0.3"], ["receiver", "0.01"]]) {
     const r = await contract.transfer({ receiverId: keys[role].accountId, amount: parseNearAmount(near) });

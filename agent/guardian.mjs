@@ -4,7 +4,7 @@
 // `cancel` — which in this contract can only refund the sender and pay the receiver
 // what was already verified, so a stolen guardian key can't redirect money.
 import { Account, JsonRpcProvider } from "near-api-js";
-import { shouldCancel } from "./check.mjs";
+import { shouldCancel, classifyError, nextDelayMs } from "./check.mjs";
 
 const {
   GUARDIAN_ACCOUNT_ID,
@@ -30,11 +30,14 @@ const grace = Number(GRACE_SECONDS);
 const intervalMs = Number(CHECK_INTERVAL_SECONDS) * 1000;
 const time = () => new Date().toISOString().slice(11, 19);
 const lastReported = new Map();
+const giveUp = new Set(); // streams that hit a permanent error (e.g. already closed)
+let rpcFailures = 0;
 
 async function tick() {
   const streams = (await provider.callFunction({ contractId: CONTRACT_ID, method: "list_streams", args: {} })) ?? [];
   for (const stream of streams) {
     if (onlyIds.size && !onlyIds.has(stream.id)) continue;
+    if (giveUp.has(stream.id)) continue;
     const decision = shouldCancel(stream, GUARDIAN_ACCOUNT_ID, Date.now(), grace);
     if (!decision.cancel) {
       if (decision.frozenForS > 0 && lastReported.get(stream.id) !== decision.frozenForS) {
@@ -48,7 +51,13 @@ async function tick() {
       const hash = outcome?.transaction_outcome?.id ?? outcome?.transaction?.hash ?? "?";
       console.log(`${time()}  ✓ cancelled stream ${stream.id} after ${decision.frozenForS}s frozen; unverified funds returned  tx ${hash}`);
     } catch (err) {
-      console.log(`${time()}  ! cancel failed for stream ${stream.id}: ${err.message.split("\n")[0]}`);
+      const message = err.message.split("\n")[0];
+      if (classifyError(err.message) === "permanent") {
+        giveUp.add(stream.id);
+        console.log(`${time()}  ■ not retrying stream ${stream.id}: ${message}`);
+      } else {
+        console.log(`${time()}  ! cancel failed for stream ${stream.id} (will retry): ${message}`);
+      }
     }
   }
 }
@@ -58,8 +67,11 @@ for (;;) {
   const started = Date.now();
   try {
     await tick();
+    rpcFailures = 0;
   } catch (err) {
-    console.log(`${time()}  ! could not read streams: ${err.message.split("\n")[0]}`);
+    rpcFailures += 1;
+    console.log(`${time()}  ! could not read streams (retrying in ${nextDelayMs(intervalMs, rpcFailures) / 1000}s): ${err.message.split("\n")[0]}`);
   }
-  await new Promise((resolve) => setTimeout(resolve, Math.max(0, intervalMs - (Date.now() - started))));
+  const delay = nextDelayMs(intervalMs, rpcFailures);
+  await new Promise((resolve) => setTimeout(resolve, Math.max(0, delay - (Date.now() - started))));
 }

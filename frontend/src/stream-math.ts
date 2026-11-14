@@ -1,5 +1,8 @@
 // Mirrors contract/src/stream-math.ts so the UI can tick the withdrawable amount
 // live between chain reads, without re-polling the RPC every second.
+// k-of-n is deliberately NOT recomputed here: the contract already reduces the
+// verifiers' attestations to one effective `lastAttestedAt` (the k-th most recent)
+// on every `attest`, and the UI reads that value from chain.
 const NANOS_PER_SECOND = 1_000_000_000n;
 
 export type StreamTiming = {

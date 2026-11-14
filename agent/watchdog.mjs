@@ -3,7 +3,7 @@
 // function-call access key scoped to `attest` — if this process or its host is
 // compromised, the key still cannot move funds.
 import { Account } from "near-api-js";
-import { checkDelivery } from "./check.mjs";
+import { checkDelivery, classifyError, nextDelayMs } from "./check.mjs";
 
 const {
   NEAR_ACCOUNT_ID,
@@ -54,10 +54,18 @@ async function tick() {
     });
     const hash = outcome?.transaction_outcome?.id ?? outcome?.transaction?.hash ?? "?";
     console.log(`${time()}  ✓ attested stream ${streamId} (${verdict.reason})  tx ${hash}`);
+    rpcFailures = 0;
   } catch (err) {
-    console.log(`${time()}  ! attest failed: ${err.message.split("\n")[0]}`);
+    const message = err.message.split("\n")[0];
+    if (classifyError(err.message) === "permanent") {
+      console.log(`${time()}  ■ stopping: ${message}`);
+      process.exit(0);
+    }
+    rpcFailures += 1;
+    console.log(`${time()}  ! attest failed (retrying in ${nextDelayMs(intervalMs, rpcFailures) / 1000}s): ${message}`);
   }
 }
+let rpcFailures = 0;
 
 console.log(`watchdog: verifying ${WORKER_URL} every ${CHECK_INTERVAL_SECONDS}s for stream ${streamId} as ${NEAR_ACCOUNT_ID}`);
 // Sequential, not setInterval: overlapping ticks would sign two transactions with the
@@ -65,5 +73,6 @@ console.log(`watchdog: verifying ${WORKER_URL} every ${CHECK_INTERVAL_SECONDS}s 
 for (;;) {
   const started = Date.now();
   await tick();
-  await new Promise((resolve) => setTimeout(resolve, Math.max(0, intervalMs - (Date.now() - started))));
+  const delay = nextDelayMs(intervalMs, rpcFailures);
+  await new Promise((resolve) => setTimeout(resolve, Math.max(0, delay - (Date.now() - started))));
 }

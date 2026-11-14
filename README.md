@@ -14,13 +14,13 @@ services only while they're delivered, with an agent that cuts them off), and
 | | |
 |---|---|
 | **Live app** (testnet, no install) | **https://callmeharshh.github.io/near-stream/** — stream #6 ticks live through Nov 19 |
-| **Verify every claim** (read-only, ~15s) | `node scripts/verify-evidence.mjs` → **21/21 PASS** |
-| **All tests** | `npm run install:all && npm test` → 20 passing (11 contract math, 9 agent rules) |
+| **Verify every claim** (read-only, ~15s) | `node scripts/verify-evidence.mjs` → **22/22 PASS** |
+| **All tests** | `npm run install:all && npm test` → 22 passing (11 contract math, 11 agent rules) |
 | **Demo script** | [`DEMO.md`](./DEMO.md) |
-| **Mainnet** | Not deployed yet (needs ~7.5 NEAR of storage deposit). `scripts/mainnet-setup.mjs` deploys the whole system (contract, scoped watchdog + guardian keys, demo stream) in one command, and has been run end to end with `DRY_RUN=1` on testnet. |
+| **Mainnet** | Not deployed yet (needs ~7.5 NEAR of storage deposit). `scripts/mainnet-setup.mjs` deploys the whole system (contract, scoped watchdog + guardian keys, demo stream) in one command. Its `DRY_RUN=1` mode broadcasts the identical flow to testnet; that run's 13 transactions are in [`evidence/`](./evidence/mainnet-script-dryrun-testnet.json) and re-checked by the verifier. |
 
 **For reviewers, with no NEAR account needed:** `npm run install:all && npm test`
-(20 unit tests), `npm run verify` (re-checks all 21 on-chain claims, read-only), and
+(22 unit tests), `npm run verify` (re-checks all 22 on-chain claims, read-only), and
 the hosted app above. Running the live agents yourself (watchdog, guardian) needs free
 testnet accounts from the faucet; see *Setup — the autonomous watchdog*.
 
@@ -252,7 +252,7 @@ other than the stream's receiver).
 ```bash
 cd agent
 npm install
-npm test                                        # 9 tests: delivery check + guardian rule
+npm test                                        # 11 tests: delivery check, guardian rule, error backoff
 node keygen.mjs <verifier>.testnet <contract-id>  # writes .env (gitignored), prints a command
 # run the printed `near account add-key ... grant-function-call-access ...` command
 #   -> registers the key as attest-only on that one contract

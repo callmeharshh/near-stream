@@ -15,6 +15,20 @@ export function checkDelivery(body, nowMs, lastSequence, maxStalenessMs) {
   return { ok: true, reason: `fresh work #${sequence}` };
 }
 
+// Agent error handling. Permanent contract errors stop the loop (retrying would only
+// burn the key's gas allowance); transient RPC failures (e.g. 429 rate limits) back off
+// exponentially, capped at 60s, and reset after the next success.
+const PERMANENT = /Stream already closed|does not exist|Only the configured verifier|Only the sender/;
+
+export function classifyError(message) {
+  return PERMANENT.test(message) ? "permanent" : "transient";
+}
+
+export function nextDelayMs(baseMs, consecutiveFailures) {
+  if (consecutiveFailures <= 0) return baseMs;
+  return Math.min(60_000, baseMs * 2 ** consecutiveFailures);
+}
+
 // Guardian rule: cancel one of *my* verifier-gated streams once its payout has been
 // frozen (heartbeat deadline passed) for at least `graceSeconds`. Cancel can only
 // refund the sender and pay the receiver what was verified, so acting early is safe.

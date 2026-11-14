@@ -1,7 +1,9 @@
 # NEAR Stream — verified pay-per-second payments
 
 Built for **NEAR HACKATHON 2026**, tracks: **Real-World Money**, **Agent
-Economy**, **AI Security & Defense**.
+Economy**, **Autonomous Business** (procurement: a business that pays for
+services only while they're delivered, with an agent that cuts them off), and
+**AI Security & Defense**.
 
 > **Pay agents and APIs per second, only while they deliver.** A watchdog agent
 > attests on-chain while work is really happening; when it stops, payment

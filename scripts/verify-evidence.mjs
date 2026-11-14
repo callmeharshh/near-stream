@@ -156,6 +156,39 @@ check("mainnet deploy script's DRY_RUN on testnet: every recorded tx succeeded (
   return dry.steps.length > 0;
 });
 
+check("withdraw-after-cancel fix: cancelled stream 2 reports nothing withdrawable", async () => {
+  const s = await view("get_stream", { stream_id: 2 });
+  return s.closed && s.withdrawable === "0";
+});
+
+check("NEP-141 stream 10 was created by ft_transfer_call on wrap.testnet", async () => {
+  const t = await tx("GfbgZCLa3a9vXvS2BQokPdpaNa39jFpoNWi51Qtt7we5", SENDER);
+  const s = await view("get_stream", { stream_id: 10 });
+  return succeeded(t) && t.transaction.receiver_id === "wrap.testnet" && s.token === "wrap.testnet" && BigInt(s.totalAmount) === 10n ** 23n;
+});
+
+check("token stream 10: receiver withdrew in wNEAR, then the guardian auto-cancelled it (cancel-only key)", async () => {
+  const w = await tx("6qUDfArfVn3mp5CNNQ3sY5txiLQxe8JgE2E8rxVBTdKx", RECEIVER);
+  const c = await tx("DWsicM5hsh58gfMx8jSZbWy5YrG2ihQPkfJVUezwKyG1", SENDER);
+  const s = await view("get_stream", { stream_id: 10 });
+  return succeeded(w) && succeeded(c) && c.transaction.public_key === GUARDIAN_KEY && s.closed && Boolean(s.settledAt) && s.withdrawable === "0";
+});
+
+check("token solvency: contract holds at least what its open wNEAR streams still owe", async () => {
+  const streams = await view("list_streams", {});
+  const owed = streams
+    .filter((s) => s.token === "wrap.testnet")
+    .reduce((sum, s) => sum + (s.closed ? 0n : BigInt(s.totalAmount) - BigInt(s.withdrawn)) + BigInt(s.refundOwed ?? "0"), 0n);
+  const result = await rpc("query", {
+    request_type: "call_function",
+    finality: "final",
+    account_id: "wrap.testnet",
+    method_name: "ft_balance_of",
+    args_base64: Buffer.from(JSON.stringify({ account_id: CONTRACT })).toString("base64"),
+  });
+  return BigInt(JSON.parse(Buffer.from(result.result).toString())) >= owed;
+});
+
 check("ungated live stream 6 accrues in real time (two reads 4s apart)", async () => {
   const a = BigInt((await view("get_stream", { stream_id: 6 })).withdrawable);
   await sleep(4000);

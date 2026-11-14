@@ -99,6 +99,35 @@ original 0.25 NEAR allowance would have run out after ~190 attests (~16 minutes 
 was re-registered (same public key, same scope) with a 2 NEAR allowance; the mainnet
 script uses 0.5 NEAR.
 
+## Withdraw-after-cancel: found in self-review, fixed with `settledAt`
+
+`withdraw` recomputed accrual from the current time and never checked whether the
+stream had been cancelled. After a healthy stream was cancelled (receiver paid up to
+then, sender refunded the rest), the receiver could withdraw again later and be paid
+for post-cancel time out of the contract's pooled balance. Confirmed read-only on
+live testnet (cancelled stream 2 reported 0.0133 NEAR withdrawable). Fix: `cancel`
+stores `settledAt` and all accrual uses `min(now, settledAt)`; closed streams without
+`settledAt` (pre-fix cancellations, full withdrawals) are treated as final. Verified
+on the dry-run contract (legacy cancelled stream → "Stream already closed";
+fresh healthy cancel → "Nothing available to withdraw yet" after time passes), then
+deployed to the live contract over existing state.
+
+## Token payouts roll back on failure instead of losing track of funds
+
+NEP-141 `ft_transfer` to a receiver who isn't storage-registered on the token fails,
+and a cross-contract failure doesn't revert the caller's earlier state changes. So
+every token payout is `ft_transfer` → `on_payout` callback (private). On failure the
+callback undoes the bookkeeping: a receiver payout restores `withdrawn` (so the
+amount is withdrawable again after the receiver registers); a sender refund goes to
+`refundOwed`, reclaimable via `claim_refund`. Native-NEAR payouts keep plain
+transfers (a transfer to an existing account can't fail this way). Integration-tested
+on the dry-run contract with `wrap.testnet`: an unregistered receiver's withdraw
+failed and rolled back to `withdrawn = 0`, then succeeded in full after registration.
+
+Testnet USDC (Circle's `3e2210…b8af`, verified live via `ft_metadata`) can't be
+minted on demand, so the live evidence uses `wrap.testnet` (wNEAR). The contract is
+token-agnostic: same NEP-141 calls, any token.
+
 ## Why `cancel` is safe to hand to an unattended agent
 
 The guardian gets a function-call key for `cancel` on the payer's account. That's

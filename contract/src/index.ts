@@ -1,6 +1,10 @@
 import { NearBindgen, near, call, view, UnorderedMap, NearPromise } from "near-sdk-js";
 import { accruedAmount, effectiveAttestedAt, type Heartbeat } from "./stream-math";
 
+const FT_TRANSFER_GAS = 15_000_000_000_000n;
+const PAYOUT_CALLBACK_GAS = 20_000_000_000_000n;
+const ONE_YOCTO = 1n; // NEP-141 requires exactly 1 yoctoNEAR on ft_transfer
+
 export class Stream {
   id: number;
   sender: string;
@@ -20,6 +24,12 @@ export class Stream {
   verifiers: string[] | null;
   threshold: number | null;
   attestations: Record<string, bigint> | null;
+  // NEP-141 token contract (e.g. USDC) the stream is denominated in; null = native NEAR.
+  token: string | null;
+  // Set when the sender cancels: accrual never counts time past this point.
+  settledAt: bigint | null;
+  // Token refunds to the sender whose ft_transfer failed; reclaimable via claim_refund.
+  refundOwed: bigint;
 
   constructor(args: {
     id: number;
@@ -31,6 +41,7 @@ export class Stream {
     verifiers: string[] | null;
     threshold: number | null;
     heartbeatSeconds: bigint | null;
+    token: string | null;
   }) {
     this.id = args.id;
     this.sender = args.sender;
@@ -46,8 +57,20 @@ export class Stream {
     this.verifiers = args.verifiers;
     this.threshold = args.threshold;
     this.attestations = args.verifiers ? Object.fromEntries(args.verifiers.map((v) => [v, args.startTime])) : null;
+    this.token = args.token;
+    this.settledAt = null;
+    this.refundOwed = 0n;
   }
 }
+
+type StreamParams = {
+  receiver_id: string;
+  duration_seconds: number;
+  verifier_id?: string | null; // shorthand for verifier_ids: [verifier_id], threshold: 1
+  verifier_ids?: string[] | null;
+  threshold?: number | null;
+  heartbeat_seconds?: number | null;
+};
 
 // Streams created before k-of-n stored a single `verifier`; treat those as 1-of-1.
 function verifiersOf(stream: Stream): string[] {
@@ -62,35 +85,200 @@ function heartbeatOf(stream: Stream): Heartbeat {
   return { lastAttestedAt: stream.lastAttestedAt, heartbeatSeconds: stream.heartbeatSeconds };
 }
 
+// Total owed to the receiver so far. A cancelled stream never accrues past settledAt.
+// Closed streams without settledAt (fully withdrawn, or cancelled before settledAt
+// existed) are final: nothing more accrues.
+function accruedNow(stream: Stream): bigint {
+  if (stream.closed && !stream.settledAt) return stream.withdrawn;
+  const now = stream.settledAt ?? near.blockTimestamp();
+  return accruedAmount(stream, now, heartbeatOf(stream));
+}
+
 @NearBindgen({})
 class StreamContract {
   nextId: number = 0;
   streams: UnorderedMap<Stream> = new UnorderedMap<Stream>("streams");
 
+  // Native-NEAR stream: the attached deposit funds it.
   @call({ payableFunction: true })
-  create_stream({
-    receiver_id,
-    duration_seconds,
-    verifier_id,
-    verifier_ids,
-    threshold,
-    heartbeat_seconds,
-  }: {
-    receiver_id: string;
-    duration_seconds: number;
-    verifier_id?: string | null; // shorthand for verifier_ids: [verifier_id], threshold: 1
-    verifier_ids?: string[] | null;
-    threshold?: number | null;
-    heartbeat_seconds?: number | null;
-  }): number {
+  create_stream(params: StreamParams): number {
     const totalAmount = near.attachedDeposit();
     if (totalAmount <= 0n) {
       throw new Error("Must attach a deposit to fund the stream");
     }
-    if (duration_seconds <= 0) {
+    return this.openStream(near.predecessorAccountId(), totalAmount, null, params);
+  }
+
+  // NEP-141 stream (e.g. USDC): the sender calls `ft_transfer_call` on the token with
+  // this contract as receiver and the stream params as `msg`. If anything here throws,
+  // the token contract refunds the sender in full (NEP-141 `ft_resolve_transfer`).
+  @call({})
+  ft_on_transfer({ sender_id, amount, msg }: { sender_id: string; amount: string; msg: string }): string {
+    const token = near.predecessorAccountId();
+    const totalAmount = BigInt(amount);
+    if (totalAmount <= 0n) {
+      throw new Error("Must transfer a positive amount");
+    }
+    this.openStream(sender_id, totalAmount, token, JSON.parse(msg) as StreamParams);
+    return "0"; // keep all transferred tokens
+  }
+
+  @call({})
+  attest({ stream_id }: { stream_id: number }): void {
+    const stream = this.requireStream(stream_id);
+    const verifiers = verifiersOf(stream);
+    if (verifiers.length === 0) {
+      throw new Error("This stream has no verifier configured");
+    }
+    const caller = near.predecessorAccountId();
+    if (!verifiers.includes(caller)) {
+      throw new Error("Only the configured verifier can attest to this stream");
+    }
+    if (stream.closed) {
+      throw new Error("Stream already closed");
+    }
+    const now = near.blockTimestamp();
+    if (stream.verifiers && stream.attestations && stream.threshold) {
+      stream.attestations[caller] = now;
+      stream.lastAttestedAt = effectiveAttestedAt(
+        stream.verifiers.map((v) => stream.attestations![v] ?? stream.startTime),
+        stream.threshold,
+      );
+    } else {
+      stream.lastAttestedAt = now; // legacy 1-of-1 stream
+    }
+    this.streams.set(String(stream_id), stream);
+    near.log(`Stream ${stream_id}: attested by ${caller}`);
+  }
+
+  @call({})
+  withdraw({ stream_id }: { stream_id: number }): NearPromise | void {
+    const stream = this.requireStream(stream_id);
+    const caller = near.predecessorAccountId();
+    if (caller !== stream.receiver) {
+      throw new Error("Only the receiver can withdraw from this stream");
+    }
+    if (stream.closed && !stream.settledAt) {
+      throw new Error("Stream already closed");
+    }
+    const available = accruedNow(stream) - stream.withdrawn;
+    if (available <= 0n) {
+      throw new Error("Nothing available to withdraw yet");
+    }
+    stream.withdrawn += available;
+    if (stream.withdrawn >= stream.totalAmount) {
+      stream.closed = true;
+    }
+    this.streams.set(String(stream_id), stream);
+    near.log(`Stream ${stream_id}: withdrawing ${available.toString()} to ${stream.receiver}`);
+    return this.payout(stream, "receiver", available);
+  }
+
+  @call({})
+  cancel({ stream_id }: { stream_id: number }): NearPromise | void {
+    const stream = this.requireStream(stream_id);
+    const caller = near.predecessorAccountId();
+    if (caller !== stream.sender) {
+      throw new Error("Only the sender can cancel this stream");
+    }
+    if (stream.closed) {
+      throw new Error("Stream already closed");
+    }
+    const now = near.blockTimestamp();
+    const accrued = accruedAmount(stream, now, heartbeatOf(stream));
+    const owedToReceiver = accrued - stream.withdrawn;
+    const refundToSender = stream.totalAmount - accrued;
+    stream.withdrawn = accrued;
+    stream.closed = true;
+    stream.settledAt = now;
+    this.streams.set(String(stream_id), stream);
+    near.log(`Stream ${stream_id} cancelled by sender: ${owedToReceiver.toString()} to receiver, ${refundToSender.toString()} refunded`);
+
+    // NEAR disallows returning a joint (`.and()`) promise, so the refund is fired independently
+    // via `.build()` (scheduled, but not part of the function's return value) and only the
+    // receiver payout is returned.
+    if (refundToSender > 0n) {
+      this.payout(stream, "sender", refundToSender).build();
+    }
+    if (owedToReceiver > 0n) {
+      return this.payout(stream, "receiver", owedToReceiver);
+    }
+    return undefined;
+  }
+
+  // Retry a token refund to the sender whose ft_transfer failed (e.g. storage unregistered).
+  @call({})
+  claim_refund({ stream_id }: { stream_id: number }): NearPromise {
+    const stream = this.requireStream(stream_id);
+    if (near.predecessorAccountId() !== stream.sender) {
+      throw new Error("Only the sender can cancel this stream");
+    }
+    const amount = stream.refundOwed ?? 0n;
+    if (amount <= 0n) {
+      throw new Error("No refund owed");
+    }
+    stream.refundOwed = 0n;
+    this.streams.set(String(stream_id), stream);
+    return this.payout(stream, "sender", amount);
+  }
+
+  // Callback after a token ft_transfer. On failure, undo the bookkeeping so the funds
+  // stay claimable instead of silently disappearing from the stream's accounts.
+  @call({ privateFunction: true })
+  on_payout({ stream_id, to, amount }: { stream_id: number; to: "receiver" | "sender"; amount: string }): boolean {
+    try {
+      near.promiseResultRaw(0);
+      return true;
+    } catch {
+      const stream = this.requireStream(stream_id);
+      const value = BigInt(amount);
+      if (to === "receiver") {
+        stream.withdrawn -= value;
+        if (!stream.settledAt) stream.closed = stream.withdrawn >= stream.totalAmount;
+      } else {
+        stream.refundOwed = (stream.refundOwed ?? 0n) + value;
+      }
+      this.streams.set(String(stream_id), stream);
+      near.log(`Stream ${stream_id}: token payout of ${amount} to ${to} failed; restored so it can be claimed again`);
+      return false;
+    }
+  }
+
+  @view({})
+  get_stream({ stream_id }: { stream_id: number }): (Stream & { withdrawable: string }) | null {
+    const stream = this.streams.get(String(stream_id));
+    if (!stream) return null;
+    const withdrawable = accruedNow(stream) - stream.withdrawn;
+    return { ...stream, withdrawable: (withdrawable > 0n ? withdrawable : 0n).toString() } as any;
+  }
+
+  @view({})
+  list_streams(): Stream[] {
+    return this.streams.toArray().map(([, stream]) => stream);
+  }
+
+  private payout(stream: Stream, to: "receiver" | "sender", amount: bigint): NearPromise {
+    const accountId = to === "receiver" ? stream.receiver : stream.sender;
+    if (!stream.token) {
+      return NearPromise.new(accountId).transfer(amount);
+    }
+    return NearPromise.new(stream.token)
+      .functionCall("ft_transfer", JSON.stringify({ receiver_id: accountId, amount: amount.toString() }), ONE_YOCTO, FT_TRANSFER_GAS)
+      .then(
+        NearPromise.new(near.currentAccountId()).functionCall(
+          "on_payout",
+          JSON.stringify({ stream_id: stream.id, to, amount: amount.toString() }),
+          0n,
+          PAYOUT_CALLBACK_GAS,
+        ),
+      );
+  }
+
+  private openStream(sender: string, totalAmount: bigint, token: string | null, params: StreamParams): number {
+    const { receiver_id, duration_seconds, verifier_id, verifier_ids, threshold, heartbeat_seconds } = params;
+    if (!receiver_id || !(duration_seconds > 0)) {
       throw new Error("duration_seconds must be positive");
     }
-    const sender = near.predecessorAccountId();
     if (receiver_id === sender) {
       throw new Error("Cannot stream to yourself");
     }
@@ -131,105 +319,14 @@ class StreamContract {
       verifiers,
       threshold: k,
       heartbeatSeconds: hasHeartbeat ? BigInt(heartbeat_seconds!) : null,
+      token,
     });
     this.streams.set(String(id), stream);
     near.log(
-      `Stream ${id} created: ${sender} -> ${receiver_id}, ${totalAmount.toString()} yoctoNEAR over ${duration_seconds}s` +
+      `Stream ${id} created: ${sender} -> ${receiver_id}, ${totalAmount.toString()} ${token ?? "yoctoNEAR"} over ${duration_seconds}s` +
         (verifiers ? `, verified by ${k} of [${verifiers.join(", ")}] every ${heartbeat_seconds}s` : ""),
     );
     return id;
-  }
-
-  @call({})
-  attest({ stream_id }: { stream_id: number }): void {
-    const stream = this.requireStream(stream_id);
-    const verifiers = verifiersOf(stream);
-    if (verifiers.length === 0) {
-      throw new Error("This stream has no verifier configured");
-    }
-    const caller = near.predecessorAccountId();
-    if (!verifiers.includes(caller)) {
-      throw new Error("Only the configured verifier can attest to this stream");
-    }
-    if (stream.closed) {
-      throw new Error("Stream already closed");
-    }
-    const now = near.blockTimestamp();
-    if (stream.verifiers && stream.attestations && stream.threshold) {
-      stream.attestations[caller] = now;
-      stream.lastAttestedAt = effectiveAttestedAt(
-        stream.verifiers.map((v) => stream.attestations![v] ?? stream.startTime),
-        stream.threshold,
-      );
-    } else {
-      stream.lastAttestedAt = now; // legacy 1-of-1 stream
-    }
-    this.streams.set(String(stream_id), stream);
-    near.log(`Stream ${stream_id}: attested by ${caller}`);
-  }
-
-  @call({})
-  withdraw({ stream_id }: { stream_id: number }): NearPromise | void {
-    const stream = this.requireStream(stream_id);
-    const caller = near.predecessorAccountId();
-    if (caller !== stream.receiver) {
-      throw new Error("Only the receiver can withdraw from this stream");
-    }
-    const accrued = accruedAmount(stream, near.blockTimestamp(), heartbeatOf(stream));
-    const available = accrued - stream.withdrawn;
-    if (available <= 0n) {
-      throw new Error("Nothing available to withdraw yet");
-    }
-    stream.withdrawn += available;
-    if (stream.withdrawn >= stream.totalAmount) {
-      stream.closed = true;
-    }
-    this.streams.set(String(stream_id), stream);
-    near.log(`Stream ${stream_id}: withdrawing ${available.toString()} yoctoNEAR to ${stream.receiver}`);
-    return NearPromise.new(stream.receiver).transfer(available);
-  }
-
-  @call({})
-  cancel({ stream_id }: { stream_id: number }): NearPromise | void {
-    const stream = this.requireStream(stream_id);
-    const caller = near.predecessorAccountId();
-    if (caller !== stream.sender) {
-      throw new Error("Only the sender can cancel this stream");
-    }
-    if (stream.closed) {
-      throw new Error("Stream already closed");
-    }
-    const accrued = accruedAmount(stream, near.blockTimestamp(), heartbeatOf(stream));
-    const owedToReceiver = accrued - stream.withdrawn;
-    const refundToSender = stream.totalAmount - accrued;
-    stream.withdrawn = accrued;
-    stream.closed = true;
-    this.streams.set(String(stream_id), stream);
-    near.log(`Stream ${stream_id} cancelled by sender: ${owedToReceiver.toString()} to receiver, ${refundToSender.toString()} refunded`);
-
-    // NEAR disallows returning a joint (`.and()`) promise, so the refund is fired independently
-    // via `.build()` (scheduled, but not part of the function's return value) and only the
-    // receiver payout is returned.
-    if (refundToSender > 0n) {
-      NearPromise.new(stream.sender).transfer(refundToSender).build();
-    }
-    if (owedToReceiver > 0n) {
-      return NearPromise.new(stream.receiver).transfer(owedToReceiver);
-    }
-    return undefined;
-  }
-
-  @view({})
-  get_stream({ stream_id }: { stream_id: number }): (Stream & { withdrawable: string }) | null {
-    const stream = this.streams.get(String(stream_id));
-    if (!stream) return null;
-    const accrued = accruedAmount(stream, near.blockTimestamp(), heartbeatOf(stream));
-    return { ...stream, withdrawable: (accrued - stream.withdrawn).toString() } as any;
-  }
-
-  @view({})
-  list_streams(): Stream[] {
-    return this.streams.toArray().map(([, stream]) => stream);
   }
 
   private requireStream(streamId: number): Stream {

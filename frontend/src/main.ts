@@ -4,6 +4,7 @@ import "./style.css";
 import { CONTRACT_ID } from "./config";
 import {
   callChange,
+  fetchTokenMeta,
   getActiveAccountId,
   initNear,
   listStreams,
@@ -11,6 +12,7 @@ import {
   showWalletModal,
   signOut,
   type RawStream,
+  type TokenMeta,
 } from "./near";
 import { accruedAmount, type Heartbeat } from "./stream-math";
 
@@ -20,9 +22,32 @@ let accountId: string | null = null;
 let streams: RawStream[] = [];
 let statusMessage = "";
 let busyStreamId: number | null = null;
+const tokenMeta = new Map<string, TokenMeta>();
+const TOKEN_GAS = 150_000_000_000_000n; // ft_transfer + rollback callback per payout
 
 function near(amountYocto: string): string {
   return `${formatNearAmount(amountYocto, 6)} NEAR`;
+}
+
+function formatUnits(amount: string, decimals: number, digits = 6): string {
+  const value = BigInt(amount);
+  const base = 10n ** BigInt(decimals);
+  const frac = (value % base).toString().padStart(decimals, "0").slice(0, Math.min(digits, decimals)).replace(/0+$/, "");
+  return frac ? `${value / base}.${frac}` : `${value / base}`;
+}
+
+function parseUnits(amount: string, decimals: number): string | null {
+  if (!/^\d+(\.\d+)?$/.test(amount)) return null;
+  const [whole, frac = ""] = amount.split(".");
+  if (frac.length > decimals) return null;
+  return (BigInt(whole) * 10n ** BigInt(decimals) + BigInt(frac.padEnd(decimals, "0") || "0")).toString();
+}
+
+// Amount in the stream's own unit: NEAR, or the token's symbol/decimals.
+function money(stream: RawStream, amount: string): string {
+  if (!stream.token) return near(amount);
+  const meta = tokenMeta.get(stream.token);
+  return meta ? `${formatUnits(amount, meta.decimals)} ${meta.symbol}` : `${amount} (${stream.token})`;
 }
 
 function verifiersOf(stream: RawStream): string[] {
@@ -46,6 +71,8 @@ function isStalled(stream: RawStream): boolean {
 }
 
 function withdrawableNow(stream: RawStream): bigint {
+  // Closed without a settle time = final (fully withdrawn, or cancelled before settledAt existed).
+  if (stream.closed && !stream.settledAt) return 0n;
   // Uses the browser clock as a stand-in for the chain's block timestamp so the UI can
   // tick between RPC reads; the contract always recomputes from the real block time on
   // withdraw/cancel, so this is a display estimate only, never the source of truth.
@@ -55,7 +82,7 @@ function withdrawableNow(stream: RawStream): bigint {
       startTime: BigInt(stream.startTime),
       durationSeconds: BigInt(stream.durationSeconds),
     },
-    BigInt(Date.now()) * 1_000_000n,
+    stream.settledAt ? BigInt(stream.settledAt) : BigInt(Date.now()) * 1_000_000n,
     heartbeatOf(stream),
   );
   const withdrawable = accrued - BigInt(stream.withdrawn);
@@ -91,10 +118,13 @@ function streamCard(stream: RawStream): string {
   const stalled = guarded && !stream.closed && isStalled(stream);
 
   const actions: string[] = [];
-  if (youAreReceiver && !stream.closed && withdrawable > 0n) {
+  if (youAreReceiver && withdrawable > 0n) {
     actions.push(
-      `<button data-action="withdraw" data-id="${stream.id}" ${busy ? "disabled" : ""}>Withdraw ${near(withdrawable.toString())}</button>`,
+      `<button data-action="withdraw" data-id="${stream.id}" ${busy ? "disabled" : ""}>Withdraw ${money(stream, withdrawable.toString())}</button>`,
     );
+  }
+  if (youAreSender && BigInt(stream.refundOwed ?? "0") > 0n) {
+    actions.push(`<button data-action="claim_refund" data-id="${stream.id}" ${busy ? "disabled" : ""}>Claim ${money(stream, stream.refundOwed!)} refund</button>`);
   }
   if (youAreSender && !stream.closed) {
     actions.push(`<button data-action="cancel" data-id="${stream.id}" class="secondary" ${busy ? "disabled" : ""}>Cancel &amp; refund remainder</button>`);
@@ -135,8 +165,8 @@ function streamCard(stream: RawStream): string {
         <div class="progress-fill ${stalled ? "stalled" : ""}" style="width:${progressPct(stream)}%"></div>
       </div>
       <div class="amounts">
-        <span>${near(stream.totalAmount)} total</span>
-        <span>${near((BigInt(stream.withdrawn) + withdrawable).toString())} unlocked</span>
+        <span>${money(stream, stream.totalAmount)} total</span>
+        <span>${money(stream, (BigInt(stream.withdrawn) + withdrawable).toString())} unlocked</span>
       </div>
       ${guarded && !stream.closed ? heartbeatReadout(stream, stalled) : ""}
       ${actions.length ? `<div class="actions">${actions.join("")}</div>` : ""}
@@ -189,8 +219,11 @@ function render() {
                  <label>Receiver account id
                    <input name="receiver" type="text" placeholder="alice.testnet" required />
                  </label>
-                 <label>Total amount (NEAR)
-                   <input name="amount" type="number" step="0.0001" min="0.0001" placeholder="1" required />
+                 <label>Pay in (NEP-141 token contract, or blank for NEAR)
+                   <input name="token" type="text" placeholder="blank = NEAR · e.g. wrap.testnet or a USDC contract" />
+                 </label>
+                 <label>Total amount
+                   <input name="amount" type="text" inputmode="decimal" placeholder="1" required />
                  </label>
                  <label>Duration (seconds)
                    <input name="duration" type="number" step="1" min="1" placeholder="3600" required />
@@ -249,9 +282,21 @@ async function onCreateStream(event: Event) {
   const heartbeat = String(data.get("heartbeat") ?? "").trim();
   const threshold = Number(String(data.get("threshold") ?? "").trim() || "1");
 
-  const depositYocto = parseNearAmount(amount as `${number}`);
+  const token = String(data.get("token") ?? "").trim();
+  let meta: TokenMeta | null = null;
+  if (token) {
+    try {
+      meta = await fetchTokenMeta(token);
+      tokenMeta.set(token, meta);
+    } catch {
+      statusMessage = `${token} doesn't look like a NEP-141 token contract.`;
+      render();
+      return;
+    }
+  }
+  const depositYocto = meta ? parseUnits(amount, meta.decimals) : parseNearAmount(amount as `${number}`);
   if (!depositYocto || depositYocto === "0") {
-    statusMessage = "Enter a valid NEAR amount.";
+    statusMessage = `Enter a valid ${meta ? meta.symbol : "NEAR"} amount.`;
     render();
     return;
   }
@@ -277,7 +322,18 @@ async function onCreateStream(event: Event) {
   statusMessage = "Confirm the transaction in your wallet…";
   render();
   try {
-    await callChange("create_stream", args, depositYocto);
+    if (token) {
+      // NEP-141: send the tokens to the stream contract with the stream params as `msg`.
+      // Requires 1 yoctoNEAR; the stream contract must be storage-registered on the token.
+      await callChange(
+        "ft_transfer_call",
+        { receiver_id: CONTRACT_ID, amount: depositYocto, msg: JSON.stringify(args) },
+        "1",
+        { receiverId: token, gas: 200_000_000_000_000n },
+      );
+    } else {
+      await callChange("create_stream", args, depositYocto);
+    }
     statusMessage = "Stream created.";
     await refreshStreams();
   } catch (err) {
@@ -291,8 +347,9 @@ async function onStreamAction(action: string, streamId: number) {
   statusMessage = "Confirm the transaction in your wallet…";
   render();
   try {
-    await callChange(action, { stream_id: streamId }, "0");
-    const labels: Record<string, string> = { withdraw: "Withdrawal", cancel: "Cancellation", attest: "Attestation" };
+    const isToken = Boolean(streams.find((s) => s.id === streamId)?.token);
+    await callChange(action, { stream_id: streamId }, "0", isToken && action !== "attest" ? { gas: TOKEN_GAS } : {});
+    const labels: Record<string, string> = { withdraw: "Withdrawal", cancel: "Cancellation", attest: "Attestation", claim_refund: "Refund" };
     statusMessage = `${labels[action] ?? "Action"} confirmed.`;
     await refreshStreams();
   } catch (err) {
@@ -304,6 +361,15 @@ async function onStreamAction(action: string, streamId: number) {
 
 async function refreshStreams() {
   streams = await listStreams();
+  for (const token of new Set(streams.map((s) => s.token).filter((t): t is string => Boolean(t)))) {
+    if (!tokenMeta.has(token)) {
+      try {
+        tokenMeta.set(token, await fetchTokenMeta(token));
+      } catch {
+        // unknown token: amounts fall back to raw units
+      }
+    }
+  }
 }
 
 async function boot() {

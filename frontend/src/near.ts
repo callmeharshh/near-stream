@@ -22,6 +22,9 @@ export type RawStream = {
   verifier?: string | null; // legacy single verifier
   verifiers?: string[] | null; // k-of-n verifiers
   threshold?: number | null;
+  token?: string | null; // NEP-141 contract (e.g. USDC); null/absent = native NEAR
+  settledAt?: string | null;
+  refundOwed?: string;
   heartbeatSeconds?: string | null;
   lastAttestedAt?: string;
 };
@@ -80,14 +83,15 @@ export async function callChange(
   methodName: string,
   args: Record<string, unknown>,
   depositYocto: string,
+  opts: { receiverId?: string; gas?: bigint } = {},
 ): Promise<void> {
   const accountId = await getActiveAccountId();
   if (!accountId) throw new Error("Not signed in");
   const wallet = await getSelector().wallet();
   await wallet.signAndSendTransaction({
     signerId: accountId,
-    receiverId: CONTRACT_ID,
-    actions: [actionCreators.functionCall(methodName, args, BigInt(DEFAULT_GAS), BigInt(depositYocto))],
+    receiverId: opts.receiverId ?? CONTRACT_ID,
+    actions: [actionCreators.functionCall(methodName, args, opts.gas ?? BigInt(DEFAULT_GAS), BigInt(depositYocto))],
   });
 }
 
@@ -98,4 +102,16 @@ export async function listStreams(): Promise<RawStream[]> {
     args: {},
   });
   return result ?? [];
+}
+
+export type TokenMeta = { symbol: string; decimals: number };
+
+export async function fetchTokenMeta(token: string): Promise<TokenMeta> {
+  const meta = await provider.callFunction<{ symbol: string; decimals: number }>({
+    contractId: token,
+    method: "ft_metadata",
+    args: {},
+  });
+  if (!meta) throw new Error(`${token} is not a NEP-141 token`);
+  return { symbol: meta.symbol, decimals: meta.decimals };
 }

@@ -14,13 +14,13 @@ services only while they're delivered, with an agent that cuts them off), and
 | | |
 |---|---|
 | **Live app** (testnet, no install) | **https://callmeharshh.github.io/near-stream/** — stream #6 ticks live through Nov 19 |
-| **Verify every claim** (read-only, ~15s) | `node scripts/verify-evidence.mjs` → **22/22 PASS** |
+| **Verify every claim** (read-only, ~15s) | `node scripts/verify-evidence.mjs` → **26/26 PASS** |
 | **All tests** | `npm run install:all && npm test` → 22 passing (11 contract math, 11 agent rules) |
 | **Demo script** | [`DEMO.md`](./DEMO.md) |
 | **Mainnet** | Not deployed yet (needs ~7.5 NEAR of storage deposit). `scripts/mainnet-setup.mjs` deploys the whole system (contract, scoped watchdog + guardian keys, demo stream) in one command. Its `DRY_RUN=1` mode broadcasts the identical flow to testnet; that run's 13 transactions are in [`evidence/`](./evidence/mainnet-script-dryrun-testnet.json) and re-checked by the verifier. |
 
 **For reviewers, with no NEAR account needed:** `npm run install:all && npm test`
-(22 unit tests), `npm run verify` (re-checks all 22 on-chain claims, read-only), and
+(22 unit tests), `npm run verify` (re-checks all 26 on-chain claims, read-only), and
 the hosted app above. Running the live agents yourself (watchdog, guardian) needs free
 testnet accounts from the faucet; see *Setup — the autonomous watchdog*.
 
@@ -88,7 +88,17 @@ primitive, not a smart-contract wrapper.
 4. The receiver can withdraw their unlocked balance at any time.
 5. The sender can cancel at any time — the receiver is paid everything accrued
    (frozen amount included) up to that moment, and the sender gets the rest
-   back, in the same transaction.
+   back, in the same transaction. A cancelled stream records `settledAt`, and
+   nothing ever accrues past it.
+6. **Streams can be paid in NEAR or in any NEP-141 token, e.g. USDC.** For a
+   token stream, the sender calls the token's `ft_transfer_call` with this
+   contract as receiver and the stream params as `msg`; the contract's
+   `ft_on_transfer` opens the stream (if it rejects the params, NEP-141 refunds
+   the sender in full). Payouts go out via `ft_transfer`, each followed by a
+   callback that **rolls the books back if the transfer failed** (e.g. the
+   receiver isn't storage-registered on the token), so the amount stays
+   claimable instead of vanishing. Failed refunds to the sender are reclaimable
+   with `claim_refund`.
 
 ## Why NEAR
 
@@ -202,6 +212,32 @@ signed by the attest-only key.
 | Killed watchdog C → **payment kept flowing** (`withdrawable` 0.00967 → 0.01067 NEAR across reads) | `get_stream` reads |
 | Killed watchdog B too → **froze**, even though watchdog A kept attesting successfully | A's still-succeeding attest: [`FxVsiwXa8M...`](https://explorer.testnet.near.org/transactions/FxVsiwXa8MNGekgBWBy1tipv4qrD2DddJ8URTkhWSbe3); the verifier script checks it landed *after* the stream's effective deadline |
 
+### Token streams (NEP-141), verified on the live contract
+
+The same code accepts any NEP-141 token, including Circle's USDC. Testnet USDC
+can't be minted on demand, so the live proof uses `wrap.testnet` (wNEAR), an
+official NEP-141 token on the same standard.
+
+| What | Evidence |
+|---|---|
+| Stream 10 created by `ft_transfer_call` on `wrap.testnet` (0.1 wNEAR, verifier-gated) | [`GfbgZCLa3a...`](https://explorer.testnet.near.org/transactions/GfbgZCLa3a9vXvS2BQokPdpaNa39jFpoNWi51Qtt7we5) |
+| Watchdog attested it; receiver withdrew **0.026667 wNEAR** | [`6qUDfArfVn...`](https://explorer.testnet.near.org/transactions/6qUDfArfVn3mp5CNNQ3sY5txiLQxe8JgE2E8rxVBTdKx) |
+| Service stalled → **guardian auto-cancelled** (cancel-only key); receiver got 0.041667, sender refunded 0.031667. 0.026667 + 0.041667 + 0.031667 = **exactly 0.1** | [`DWsicM5hsh...`](https://explorer.testnet.near.org/transactions/DWsicM5hsh58gfMx8jSZbWy5YrG2ihQPkfJVUezwKyG1) |
+| Failed payout to an unregistered receiver rolled back, then succeeded after registration (dry-run contract integration test) | see `DECISIONS.md` |
+| Solvency: the contract's wNEAR balance covers everything its open token streams owe | checked by the verifier script |
+
+### A bug we found in our own contract (fixed)
+
+During self-review we found that `withdraw` didn't account for cancellation: after
+the sender cancelled a *healthy* stream and was refunded, the receiver could later
+call `withdraw` and be paid accrual for time after the cancel, out of other
+streams' funds. It was testnet-only and never exploited, but it was real
+(cancelled stream 2 reported 0.0133 NEAR "withdrawable"). Fix: cancel records
+`settledAt` and accrual can never pass it; closed streams without it (older
+cancellations, full withdrawals) are final. The upgraded contract was deployed over
+live state, all prior evidence still verifies, and stream 2 now reports 0, which the
+verifier script checks.
+
 ## Setup — contract
 
 ```bash
@@ -301,11 +337,11 @@ something that sustains itself.
 
 - **Paid verification:** reserve a small, sender-chosen share of each stream for the
   watchdogs that attested, so k-of-n verification is a service operators are paid to run.
-- **Stablecoin streams (NEP-141, e.g. USDC):** businesses budget in dollars; NEAR-only
-  streams are fine for a demo but not for real procurement.
 - **Rust contract port:** cut the ~13 Tgas attest cost several-fold, which makes
   minute-level heartbeats nearly free.
 - **Mainnet:** the deploy script is ready and dry-run tested (`scripts/mainnet-setup.mjs`).
+  On mainnet, token streams work with Circle's USDC as-is (built and verified on
+  testnet with wNEAR, the same NEP-141 standard).
 
 **What keeps the codebase maintainable:** the money math is isolated in pure functions
 with unit tests, every on-chain claim is re-checkable with one command, and
@@ -323,6 +359,10 @@ with unit tests, every on-chain claim is re-checkable with one command, and
   amount rather than "catching up" gradually from the freeze point (see
   `DECISIONS.md`). There's no dispute/arbitration step beyond that — it's a
   binary attest/don't-attest signal, not a partial-quality score.
+- **Token streams:** receivers must be storage-registered on the token to be paid
+  (an unregistered payout rolls back and stays claimable). Token withdraw/cancel need
+  ~150 Tgas, and NEAR reserves prepaid gas at a pessimistic price, so the caller needs
+  roughly 0.15 NEAR of balance at call time (refunded after).
 - **Gas economics:** each `attest` burns ~13 Tgas (≈0.0013 NEAR), since a
   JavaScript (QuickJS) contract is gas-heavy. The demo checks every 5s for
   visibility; real deployments would attest every 1–5 minutes (≈0.4–1.9

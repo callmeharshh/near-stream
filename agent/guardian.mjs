@@ -47,7 +47,13 @@ async function tick() {
       continue;
     }
     try {
-      const outcome = await account.callFunctionRaw({ contractId: CONTRACT_ID, methodName: "cancel", args: { stream_id: stream.id } });
+      const outcome = await account.callFunctionRaw({
+        contractId: CONTRACT_ID,
+        methodName: "cancel",
+        args: { stream_id: stream.id },
+        // token streams pay out via ft_transfer + a rollback callback for each party
+        gas: stream.token ? 150_000_000_000_000n : 30_000_000_000_000n,
+      });
       const hash = outcome?.transaction_outcome?.id ?? outcome?.transaction?.hash ?? "?";
       console.log(`${time()}  ✓ cancelled stream ${stream.id} after ${decision.frozenForS}s frozen; unverified funds returned  tx ${hash}`);
     } catch (err) {

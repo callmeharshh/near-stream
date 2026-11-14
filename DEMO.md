@@ -56,13 +56,15 @@ live on testnet, and the repo has every transaction hash."
 
 ## X post draft (must be posted by you)
 
-> Built NEAR Stream at #NEARHackathon 🔁
+> Built at NEAR HACKATHON: NEAR Stream 🔁
 >
-> Pay AI agents & APIs per second — only while they actually deliver.
-> An autonomous watchdog attests on-chain; the service stalls → payment freezes. No disputes, no invoices.
+> Pay AI agents & APIs per second, only while they actually deliver.
+> An autonomous watchdog attests on-chain. Service stalls → payment freezes. No disputes, no invoices.
 >
-> The watchdog's NEAR key can only call `attest` — it can't move a coin, even if hacked.
+> The watchdog's NEAR key can only call `attest`. Even if it's hacked, it can't move a coin.
 >
-> Live on testnet 👇 @NEARProtocol
-> github.com/callmeharshh/near-stream
+> Try it live: callmeharshh.github.io/near-stream
+> Code + on-chain proof: github.com/callmeharshh/near-stream
+>
+> @NEARProtocol #NEARHackathon @NearBuilders @NearLegion
 > [attach video]

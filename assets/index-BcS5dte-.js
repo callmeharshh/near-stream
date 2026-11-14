@@ -139,7 +139,8 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           <li><strong>Optional:</strong> gate it on a verifier's heartbeat — e.g. an autonomous watchdog
             agent that checks the paid service and attests while it's really delivering, using a NEAR key
             that can call <code>attest</code> and nothing else. Delivery stops → attestations stop → payout
-            freezes automatically, no dispute needed; the sender can safely cancel at the frozen amount.</li>
+            freezes automatically. A payer-side guardian agent (with a cancel-only key) then cancels and
+            returns the unverified money. No human on either side.</li>
         </ol>
         <p class="hint">
           Testnet demo — no real funds. Contract: <code>${CONTRACT_ID}</code>

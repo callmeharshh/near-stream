@@ -23,8 +23,28 @@ const KEYS = join(DIR, "keys.json");
 const EVIDENCE = DRY_RUN
   ? join(DIR, "evidence.json")
   : join(dirname(fileURLToPath(import.meta.url)), "../mainnet-evidence.json");
-const WASM = join(dirname(fileURLToPath(import.meta.url)), "../contract/build/contract.wasm");
-const MIN_FUNDING = parseNearAmount("6.5");
+// The Rust build (contract-rs/) needs ~1.5 NEAR of storage vs ~5.6 for the JS one; same methods and JSON.
+const WASM = process.env.WASM_PATH ?? join(dirname(fileURLToPath(import.meta.url)), "../contract-rs/target/near/near_stream.wasm");
+// 1.85 = 1.51 deploy-time storage need + 0.23 for the accounts + ~0.1 buffer (measured on testnet)
+const MIN_FUNDING = parseNearAmount(process.env.MIN_FUNDING_NEAR ?? "1.85");
+
+// Per-account funding (NEAR), overridable via env; defaults are sized from the measured testnet rehearsal.
+const FUND = {
+  sender: process.env.FUND_SENDER ?? "0.16", // 0.05 stream + 0.1 gas reserve for the guardian's cancel
+  verifier: process.env.FUND_VERIFIER ?? "0.06", // 0.03 gas reserve + ~0.000187 per attest
+  receiver: process.env.FUND_RECEIVER ?? "0.01",
+  watchdogAllowance: process.env.WATCHDOG_ALLOWANCE ?? "0.5",
+  guardianAllowance: process.env.GUARDIAN_ALLOWANCE ?? "0.5",
+};
+
+async function keyExists(accountId, publicKey) {
+  try {
+    await new JsonRpcProvider({ url: RPC }).viewAccessKey({ accountId, publicKey });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 const implicitId = (kp) => Buffer.from(kp.getPublicKey().data).toString("hex");
 const hashOf = (r) => r?.transaction?.hash ?? r?.transaction_outcome?.id ?? "?";
@@ -84,39 +104,46 @@ if (command === "keys") {
   const keys = makeKeys();
   const have = await balance(keys.contract.accountId);
   if (have < BigInt(MIN_FUNDING)) {
-    console.error(`contract account has ${formatNearAmount(have.toString(), 4)} NEAR; needs >= 6.5 NEAR. Not deploying.`);
+    console.error(`contract account has ${formatNearAmount(have.toString(), 4)} NEAR; needs >= ${formatNearAmount(MIN_FUNDING, 2)} NEAR. Not deploying.`);
     process.exit(1);
   }
   const contract = accountOf(keys.contract);
   const ids = Object.fromEntries(Object.entries(keys).map(([r, k]) => [r, k.accountId]));
-  writeFileSync(EVIDENCE, JSON.stringify({ network: DRY_RUN ? "testnet" : "mainnet", accounts: ids, watchdogKey: keys.watchdog.publicKey, steps: [] }, null, 2));
+  if (!existsSync(EVIDENCE)) {
+    writeFileSync(EVIDENCE, JSON.stringify({ network: DRY_RUN ? "testnet" : "mainnet", accounts: ids, watchdogKey: keys.watchdog.publicKey, guardianKey: keys.guardian.publicKey, steps: [] }, null, 2));
+  }
 
-  for (const [role, near] of [["sender", "0.4"], ["verifier", "0.3"], ["receiver", "0.01"]]) {
+  // Resumable: every step is skipped if already done, so a failed run can simply be re-run.
+  // Deploy first so the contract's storage is locked before any funds go elsewhere.
+  const deployed = await contract.deployContract(new Uint8Array(readFileSync(WASM)));
+  record({ step: "deploy contract", tx: hashOf(deployed) });
+
+  for (const [role, near] of [["sender", FUND.sender], ["verifier", FUND.verifier], ["receiver", FUND.receiver]]) {
+    if ((await balance(keys[role].accountId)) >= BigInt(parseNearAmount(near))) continue;
     const r = await contract.transfer({ receiverId: keys[role].accountId, amount: parseNearAmount(near) });
     record({ step: `fund ${role} with ${near} NEAR`, tx: hashOf(r) });
   }
 
-  const deployed = await contract.deployContract(new Uint8Array(readFileSync(WASM)));
-  record({ step: "deploy contract", tx: hashOf(deployed) });
+  if (!(await keyExists(keys.verifier.accountId, keys.watchdog.publicKey))) {
+    const keyTx = await accountOf(keys.verifier).addFunctionCallAccessKey({
+      publicKey: keys.watchdog.publicKey,
+      contractId: keys.contract.accountId,
+      methodNames: ["attest"],
+      // allowance is checked against each call's full prepaid gas at a pessimistic price (~0.03 NEAR for 30 Tgas)
+      allowance: parseNearAmount(FUND.watchdogAllowance),
+    });
+    record({ step: "register attest-only watchdog key on verifier", tx: hashOf(keyTx) });
+  }
 
-  const keyTx = await accountOf(keys.verifier).addFunctionCallAccessKey({
-    publicKey: keys.watchdog.publicKey,
-    contractId: keys.contract.accountId,
-    methodNames: ["attest"],
-    // each attest burns ~13 Tgas (~0.0013 NEAR): 0.5 NEAR allowance ≈ 380 attests ≈ 30 min at 5s checks
-    // (the verifier's 0.3 NEAR balance, which pays the burnt gas, is the tighter limit: ≈ 19 min)
-    allowance: parseNearAmount("0.5"),
-  });
-  record({ step: "register attest-only watchdog key on verifier", tx: hashOf(keyTx) });
-
-  const guardianKeyTx = await accountOf(keys.sender).addFunctionCallAccessKey({
-    publicKey: keys.guardian.publicKey,
-    contractId: keys.contract.accountId,
-    methodNames: ["cancel"],
-    // allowance is checked against the full prepaid gas at a pessimistic price (~0.1 NEAR per 100 Tgas cancel)
-    allowance: parseNearAmount("0.5"),
-  });
-  record({ step: "register cancel-only guardian key on sender", tx: hashOf(guardianKeyTx) });
+  if (!(await keyExists(keys.sender.accountId, keys.guardian.publicKey))) {
+    const guardianKeyTx = await accountOf(keys.sender).addFunctionCallAccessKey({
+      publicKey: keys.guardian.publicKey,
+      contractId: keys.contract.accountId,
+      methodNames: ["cancel"],
+      allowance: parseNearAmount(FUND.guardianAllowance),
+    });
+    record({ step: "register cancel-only guardian key on sender", tx: hashOf(guardianKeyTx) });
+  }
 
   const created = await accountOf(keys.sender).callFunctionRaw({
     contractId: keys.contract.accountId,

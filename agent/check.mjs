@@ -20,7 +20,8 @@ export function checkDelivery(body, nowMs, lastSequence, maxStalenessMs) {
 // refund the sender and pay the receiver what was verified, so acting early is safe.
 export function shouldCancel(stream, myAccountId, nowMs, graceSeconds) {
   if (stream.closed || stream.sender !== myAccountId) return { cancel: false };
-  if (!stream.verifier || !stream.heartbeatSeconds || !stream.lastAttestedAt) return { cancel: false };
+  const guarded = Boolean(stream.verifier) || (stream.verifiers?.length ?? 0) > 0;
+  if (!guarded || !stream.heartbeatSeconds || !stream.lastAttestedAt) return { cancel: false };
   const deadlineMs = Number(BigInt(stream.lastAttestedAt) / 1_000_000n) + Number(stream.heartbeatSeconds) * 1000;
   const frozenForS = Math.floor((nowMs - deadlineMs) / 1000);
   if (frozenForS < graceSeconds) return { cancel: false, frozenForS };

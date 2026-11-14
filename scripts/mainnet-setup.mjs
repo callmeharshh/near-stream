@@ -91,7 +91,7 @@ if (command === "keys") {
   const ids = Object.fromEntries(Object.entries(keys).map(([r, k]) => [r, k.accountId]));
   writeFileSync(EVIDENCE, JSON.stringify({ network: "mainnet", accounts: ids, watchdogKey: keys.watchdog.publicKey, steps: [] }, null, 2));
 
-  for (const [role, near] of [["sender", "0.15"], ["verifier", "0.08"], ["receiver", "0.01"]]) {
+  for (const [role, near] of [["sender", "0.15"], ["verifier", "0.3"], ["receiver", "0.01"]]) {
     const r = await contract.transfer({ receiverId: keys[role].accountId, amount: parseNearAmount(near) });
     record({ step: `fund ${role} with ${near} NEAR`, tx: hashOf(r) });
   }
@@ -103,7 +103,9 @@ if (command === "keys") {
     publicKey: keys.watchdog.publicKey,
     contractId: keys.contract.accountId,
     methodNames: ["attest"],
-    allowance: parseNearAmount("0.05"),
+    // each attest burns ~13 Tgas (~0.0013 NEAR): 0.5 NEAR allowance ≈ 380 attests ≈ 30 min at 5s checks
+    // (the verifier's 0.3 NEAR balance, which pays the burnt gas, is the tighter limit: ≈ 19 min)
+    allowance: parseNearAmount("0.5"),
   });
   record({ step: "register attest-only watchdog key on verifier", tx: hashOf(keyTx) });
 

@@ -25,8 +25,13 @@ function near(amountYocto: string): string {
   return `${formatNearAmount(amountYocto, 6)} NEAR`;
 }
 
+function verifiersOf(stream: RawStream): string[] {
+  if (stream.verifiers?.length) return stream.verifiers;
+  return stream.verifier ? [stream.verifier] : [];
+}
+
 function heartbeatOf(stream: RawStream): Heartbeat {
-  if (!stream.verifier || !stream.heartbeatSeconds || !stream.lastAttestedAt) return null;
+  if (verifiersOf(stream).length === 0 || !stream.heartbeatSeconds || !stream.lastAttestedAt) return null;
   return {
     lastAttestedAt: BigInt(stream.lastAttestedAt),
     heartbeatSeconds: BigInt(stream.heartbeatSeconds),
@@ -70,14 +75,16 @@ function heartbeatReadout(stream: RawStream, stalled: boolean): string {
   const window = Number(stream.heartbeatSeconds);
   const detail = stalled
     ? `<strong>Payout frozen</strong> — no attestation for ${sinceAttest}s (window ${window}s). The sender can cancel at the frozen amount; the next attestation releases the real elapsed amount.`
-    : `Last attestation ${sinceAttest}s ago · payout freezes in <strong>${window - sinceAttest}s</strong> unless the verifier attests again.`;
+    : `Last attestation ${sinceAttest}s ago · payout freezes in <strong>${window - sinceAttest}s</strong> unless ${
+        verifiersOf(stream).length > 1 ? `${stream.threshold} of ${verifiersOf(stream).length} verifiers attest` : "the verifier attests"
+      } again.`;
   return `<p class="hint guard-hint ${stalled ? "frozen" : ""}">${detail}</p>`;
 }
 
 function streamCard(stream: RawStream): string {
   const youAreReceiver = accountId === stream.receiver;
   const youAreSender = accountId === stream.sender;
-  const youAreVerifier = accountId === stream.verifier;
+  const youAreVerifier = accountId !== null && verifiersOf(stream).includes(accountId);
   const withdrawable = withdrawableNow(stream);
   const busy = busyStreamId === stream.id;
   const guarded = heartbeatOf(stream) !== null;
@@ -116,7 +123,13 @@ function streamCard(stream: RawStream): string {
       <div class="parties">
         <div><label>From</label><span>${stream.sender}</span></div>
         <div><label>To</label><span>${stream.receiver}</span></div>
-        ${guarded ? `<div><label>Verifier</label><span>${stream.verifier}</span></div>` : ""}
+        ${
+          guarded
+            ? verifiersOf(stream).length > 1
+              ? `<div class="wide"><label>Verifiers — ${stream.threshold} of ${verifiersOf(stream).length} must attest</label><span>${verifiersOf(stream).join("<br>")}</span></div>`
+              : `<div><label>Verifier</label><span>${verifiersOf(stream)[0]}</span></div>`
+            : ""
+        }
       </div>
       <div class="progress-track">
         <div class="progress-fill ${stalled ? "stalled" : ""}" style="width:${progressPct(stream)}%"></div>
@@ -157,8 +170,8 @@ function render() {
           <li>Sender locks NEAR, naming a receiver and a duration.</li>
           <li>The unlocked amount grows every second — watch it tick below.</li>
           <li>Receiver withdraws anytime; sender can cancel anytime for a refund of the remainder.</li>
-          <li><strong>Optional:</strong> gate it on a verifier's heartbeat — e.g. an autonomous watchdog
-            agent that checks the paid service and attests while it's really delivering, using a NEAR key
+          <li><strong>Optional:</strong> gate it on verifiers' heartbeats (one, or any k of n) — e.g. autonomous
+            watchdog agents that check the paid service and attest while it's really delivering, each with a NEAR key
             that can call <code>attest</code> and nothing else. Delivery stops → attestations stop → payout
             freezes automatically. A payer-side guardian agent (with a cancel-only key) then cancels and
             returns the unverified money. No human on either side.</li>
@@ -184,8 +197,11 @@ function render() {
                  </label>
                  <fieldset class="verifier-fields">
                    <legend>Optional: gate it on a verifier's heartbeat</legend>
-                   <label>Verifier account id
+                   <label>Verifier account id(s), comma-separated
                      <input name="verifier" type="text" placeholder="leave blank for an unguarded stream" />
+                   </label>
+                   <label>How many must attest (k of n)
+                     <input name="threshold" type="number" step="1" min="1" placeholder="1" />
                    </label>
                    <label>Heartbeat window (seconds)
                      <input name="heartbeat" type="number" step="1" min="1" placeholder="e.g. 300" />
@@ -225,8 +241,13 @@ async function onCreateStream(event: Event) {
   const receiver = String(data.get("receiver")).trim();
   const amount = String(data.get("amount")).trim();
   const duration = Number(data.get("duration"));
-  const verifier = String(data.get("verifier") ?? "").trim();
+  const verifiers = String(data.get("verifier") ?? "")
+    .split(",")
+    .map((v) => v.trim())
+    .filter(Boolean);
+  const verifier = verifiers.join(",");
   const heartbeat = String(data.get("heartbeat") ?? "").trim();
+  const threshold = Number(String(data.get("threshold") ?? "").trim() || "1");
 
   const depositYocto = parseNearAmount(amount as `${number}`);
   if (!depositYocto || depositYocto === "0") {
@@ -240,9 +261,16 @@ async function onCreateStream(event: Event) {
     return;
   }
 
+  if (verifiers.length && (!Number.isInteger(threshold) || threshold < 1 || threshold > verifiers.length)) {
+    statusMessage = `"How many must attest" must be between 1 and ${verifiers.length}.`;
+    render();
+    return;
+  }
+
   const args: Record<string, unknown> = { receiver_id: receiver, duration_seconds: duration };
-  if (verifier && heartbeat) {
-    args.verifier_id = verifier;
+  if (verifiers.length && heartbeat) {
+    args.verifier_ids = verifiers;
+    args.threshold = threshold;
     args.heartbeat_seconds = Number(heartbeat);
   }
 

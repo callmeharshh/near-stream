@@ -21,6 +21,11 @@ test("guardian: waits out the grace period after the freeze, then cancels", () =
   assert.equal(shouldCancel(guarded, "payer.testnet", ms("2026-11-14T12:00:51.000Z"), 30).cancel, true); // frozen 31s
 });
 
+test("guardian: also guards k-of-n streams (verifiers list instead of a single verifier)", () => {
+  const kofn = { ...guarded, verifier: null, verifiers: ["a.testnet", "b.testnet", "c.testnet"], threshold: 2 };
+  assert.equal(shouldCancel(kofn, "payer.testnet", ms("2026-11-14T12:00:51.000Z"), 30).cancel, true);
+});
+
 test("guardian: never touches streams it isn't the sender of, closed streams, or unguarded streams", () => {
   const later = ms("2026-11-14T13:00:00.000Z");
   assert.equal(shouldCancel(guarded, "someone-else.testnet", later, 30).cancel, false);

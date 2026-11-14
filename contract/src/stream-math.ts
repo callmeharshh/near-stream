@@ -15,6 +15,15 @@ export type Heartbeat = {
   heartbeatSeconds: bigint;
 } | null;
 
+// k-of-n verification: the stream counts as attested at time T only once at least
+// `threshold` distinct verifiers have attested at or after T, i.e. the k-th most
+// recent attestation. One verifier alone can neither keep a dead service paid
+// (with k >= 2) nor freeze a healthy one (with k < n).
+export function effectiveAttestedAt(attestationTimes: bigint[], threshold: number): bigint {
+  const sorted = [...attestationTimes].sort((a, b) => (a > b ? -1 : a < b ? 1 : 0));
+  return sorted[threshold - 1];
+}
+
 export function accruedAmount(stream: StreamTiming, now: bigint, heartbeat: Heartbeat = null): bigint {
   let effectiveNow = now;
   if (heartbeat) {

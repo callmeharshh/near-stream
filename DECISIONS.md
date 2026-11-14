@@ -78,6 +78,27 @@ account permanently unmanageable (no way to rotate the watchdog key); for a
 production verifier you'd keep it on a hardware wallet. The verifier script checks
 that every watchdog transaction was signed by the attest-only key specifically.
 
+## k-of-n verification via one stored number
+
+Multi-verifier streams store each verifier's latest attestation, but the stream's
+`lastAttestedAt` is recomputed on every `attest` as the **k-th most recent**
+attestation. Everything downstream (the freeze math, the guardian, the frontend
+countdown, the evidence checks) already keys off `lastAttestedAt`, so k-of-n needed
+no changes outside `create_stream`/`attest`. The value can only move forward, since
+each verifier's own time only increases. Streams created before this upgrade have
+a single `verifier` field and keep working as 1-of-1; the upgrade was deployed over
+live state, and all 19 existing evidence checks still passed afterwards.
+
+## Watchdog keys need a gas allowance sized for their runtime
+
+A function-call key's allowance is spent by the gas its transactions burn, and each
+`attest` on this JavaScript contract burns ~13 Tgas (≈0.0013 NEAR, measured). The
+original 0.25 NEAR allowance would have run out after ~190 attests (~16 minutes at
+5s checks). A stray watchdog left running against a closed stream had already spent
+40% of it, which could have killed the demo mid-recording. The testnet watchdog key
+was re-registered (same public key, same scope) with a 2 NEAR allowance; the mainnet
+script uses 0.5 NEAR.
+
 ## Why `cancel` is safe to hand to an unattended agent
 
 The guardian gets a function-call key for `cancel` on the payer's account. That's

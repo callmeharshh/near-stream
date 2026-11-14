@@ -19,7 +19,9 @@ export type RawStream = {
   withdrawn: string;
   closed: boolean;
   // Absent on streams created before the verifier/heartbeat feature shipped.
-  verifier?: string | null;
+  verifier?: string | null; // legacy single verifier
+  verifiers?: string[] | null; // k-of-n verifiers
+  threshold?: number | null;
   heartbeatSeconds?: string | null;
   lastAttestedAt?: string;
 };

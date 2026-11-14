@@ -239,6 +239,10 @@ button.secondary {
   overflow-wrap: anywhere;
 }
 
+.parties > div.wide {
+  flex-basis: 100%;
+}
+
 .parties label {
   display: block;
   color: var(--muted);

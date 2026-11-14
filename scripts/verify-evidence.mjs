@@ -110,6 +110,30 @@ check("stream 3 is permanently frozen below its total, long after its duration e
   return Date.now() > durationEndedMs && unlocked < BigInt(s.totalAmount);
 });
 
+check("stream 9 is gated 2-of-3 on three distinct verifiers, each with its own attest-only key", async () => {
+  const s = await view("get_stream", { stream_id: 9 });
+  if (s.threshold !== 2 || s.verifiers.length !== 3 || new Set(s.verifiers).size !== 3) return false;
+  for (const account_id of s.verifiers) {
+    const { keys } = await rpc("query", { request_type: "view_access_key_list", finality: "final", account_id });
+    const scoped = keys.some((k) => {
+      const fc = k.access_key.permission?.FunctionCall;
+      return fc && fc.receiver_id === CONTRACT && fc.method_names.length === 1 && fc.method_names[0] === "attest";
+    });
+    if (!scoped) return false;
+  }
+  return true;
+});
+
+check("2-of-3: a lone watchdog's successful attest did NOT keep stream 9 paid (effective attestation stayed older)", async () => {
+  const LONE_ATTEST = "FxVsiwXa8MNGekgBWBy1tipv4qrD2DddJ8URTkhWSbe3"; // verifier A, after B and C were stopped
+  const t = await tx(LONE_ATTEST, VERIFIER);
+  const block = await rpc("block", { block_id: t.transaction_outcome.block_hash });
+  const attestedAtNs = BigInt(block.header.timestamp_nanosec);
+  const s = await view("get_stream", { stream_id: 9 });
+  const deadlineNs = BigInt(s.lastAttestedAt) + BigInt(s.heartbeatSeconds) * 1_000_000_000n;
+  return succeeded(t) && t.transaction.actions[0]?.FunctionCall?.method_name === "attest" && deadlineNs < attestedAtNs;
+});
+
 check("ungated live stream 6 accrues in real time (two reads 4s apart)", async () => {
   const a = BigInt((await view("get_stream", { stream_id: 6 })).withdrawable);
   await sleep(4000);

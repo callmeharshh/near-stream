@@ -1,5 +1,5 @@
 import { NearBindgen, near, call, view, UnorderedMap, NearPromise } from "near-sdk-js";
-import { accruedAmount, type Heartbeat } from "./stream-math";
+import { accruedAmount, effectiveAttestedAt, type Heartbeat } from "./stream-math";
 
 export class Stream {
   id: number;
@@ -13,9 +13,13 @@ export class Stream {
   // Optional: an account that must periodically call `attest` to keep the stream
   // accruing. If attestations stop, accrual freezes at the last-attested deadline
   // until a fresh attestation arrives. `verifier` null means an unguarded stream.
-  verifier: string | null;
+  verifier: string | null; // legacy single-verifier streams (created before k-of-n)
   heartbeatSeconds: bigint | null;
+  // Effective attestation time: for k-of-n streams, the k-th most recent attestation.
   lastAttestedAt: bigint;
+  verifiers: string[] | null;
+  threshold: number | null;
+  attestations: Record<string, bigint> | null;
 
   constructor(args: {
     id: number;
@@ -24,7 +28,8 @@ export class Stream {
     totalAmount: bigint;
     startTime: bigint;
     durationSeconds: bigint;
-    verifier: string | null;
+    verifiers: string[] | null;
+    threshold: number | null;
     heartbeatSeconds: bigint | null;
   }) {
     this.id = args.id;
@@ -35,14 +40,25 @@ export class Stream {
     this.durationSeconds = args.durationSeconds;
     this.withdrawn = 0n;
     this.closed = false;
-    this.verifier = args.verifier;
+    this.verifier = null;
     this.heartbeatSeconds = args.heartbeatSeconds;
     this.lastAttestedAt = args.startTime;
+    this.verifiers = args.verifiers;
+    this.threshold = args.threshold;
+    this.attestations = args.verifiers ? Object.fromEntries(args.verifiers.map((v) => [v, args.startTime])) : null;
   }
 }
 
+// Streams created before k-of-n stored a single `verifier`; treat those as 1-of-1.
+function verifiersOf(stream: Stream): string[] {
+  if (stream.verifiers && stream.verifiers.length) return stream.verifiers;
+  return stream.verifier ? [stream.verifier] : [];
+}
+
 function heartbeatOf(stream: Stream): Heartbeat {
-  if (!stream.verifier || stream.heartbeatSeconds === null) return null;
+  if (verifiersOf(stream).length === 0 || stream.heartbeatSeconds === null || stream.heartbeatSeconds === undefined) {
+    return null;
+  }
   return { lastAttestedAt: stream.lastAttestedAt, heartbeatSeconds: stream.heartbeatSeconds };
 }
 
@@ -56,11 +72,15 @@ class StreamContract {
     receiver_id,
     duration_seconds,
     verifier_id,
+    verifier_ids,
+    threshold,
     heartbeat_seconds,
   }: {
     receiver_id: string;
     duration_seconds: number;
-    verifier_id?: string | null;
+    verifier_id?: string | null; // shorthand for verifier_ids: [verifier_id], threshold: 1
+    verifier_ids?: string[] | null;
+    threshold?: number | null;
     heartbeat_seconds?: number | null;
   }): number {
     const totalAmount = near.attachedDeposit();
@@ -74,13 +94,26 @@ class StreamContract {
     if (receiver_id === sender) {
       throw new Error("Cannot stream to yourself");
     }
-    const hasVerifier = verifier_id !== undefined && verifier_id !== null;
+    if (verifier_id && verifier_ids) {
+      throw new Error("Pass verifier_id or verifier_ids, not both");
+    }
+    const verifiers = verifier_ids ?? (verifier_id ? [verifier_id] : null);
+    const hasVerifier = verifiers !== null;
     const hasHeartbeat = heartbeat_seconds !== undefined && heartbeat_seconds !== null;
     if (hasVerifier !== hasHeartbeat) {
       throw new Error("verifier_id and heartbeat_seconds must be set together");
     }
-    if (hasVerifier && verifier_id === receiver_id) {
-      throw new Error("The verifier cannot be the receiver");
+    let k: number | null = null;
+    if (verifiers) {
+      if (verifiers.length === 0) throw new Error("verifier_ids must not be empty");
+      if (new Set(verifiers).size !== verifiers.length) throw new Error("verifier_ids must be distinct");
+      if (verifiers.includes(receiver_id)) throw new Error("The verifier cannot be the receiver");
+      k = threshold ?? 1;
+      if (!Number.isInteger(k) || k < 1 || k > verifiers.length) {
+        throw new Error("threshold must be between 1 and the number of verifiers");
+      }
+    } else if (threshold !== undefined && threshold !== null) {
+      throw new Error("threshold requires verifier_ids");
     }
     if (hasHeartbeat && heartbeat_seconds! <= 0) {
       throw new Error("heartbeat_seconds must be positive");
@@ -95,13 +128,14 @@ class StreamContract {
       totalAmount,
       startTime: near.blockTimestamp(),
       durationSeconds: BigInt(duration_seconds),
-      verifier: hasVerifier ? verifier_id! : null,
+      verifiers,
+      threshold: k,
       heartbeatSeconds: hasHeartbeat ? BigInt(heartbeat_seconds!) : null,
     });
     this.streams.set(String(id), stream);
     near.log(
       `Stream ${id} created: ${sender} -> ${receiver_id}, ${totalAmount.toString()} yoctoNEAR over ${duration_seconds}s` +
-        (hasVerifier ? `, verified by ${verifier_id} every ${heartbeat_seconds}s` : ""),
+        (verifiers ? `, verified by ${k} of [${verifiers.join(", ")}] every ${heartbeat_seconds}s` : ""),
     );
     return id;
   }
@@ -109,18 +143,29 @@ class StreamContract {
   @call({})
   attest({ stream_id }: { stream_id: number }): void {
     const stream = this.requireStream(stream_id);
-    if (!stream.verifier) {
+    const verifiers = verifiersOf(stream);
+    if (verifiers.length === 0) {
       throw new Error("This stream has no verifier configured");
     }
-    if (near.predecessorAccountId() !== stream.verifier) {
+    const caller = near.predecessorAccountId();
+    if (!verifiers.includes(caller)) {
       throw new Error("Only the configured verifier can attest to this stream");
     }
     if (stream.closed) {
       throw new Error("Stream already closed");
     }
-    stream.lastAttestedAt = near.blockTimestamp();
+    const now = near.blockTimestamp();
+    if (stream.verifiers && stream.attestations && stream.threshold) {
+      stream.attestations[caller] = now;
+      stream.lastAttestedAt = effectiveAttestedAt(
+        stream.verifiers.map((v) => stream.attestations![v] ?? stream.startTime),
+        stream.threshold,
+      );
+    } else {
+      stream.lastAttestedAt = now; // legacy 1-of-1 stream
+    }
     this.streams.set(String(stream_id), stream);
-    near.log(`Stream ${stream_id}: attested by ${stream.verifier}`);
+    near.log(`Stream ${stream_id}: attested by ${caller}`);
   }
 
   @call({})

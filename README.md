@@ -12,8 +12,8 @@ Economy**, **AI Security & Defense**.
 | | |
 |---|---|
 | **Live app** (testnet, no install) | **https://callmeharshh.github.io/near-stream/** — stream #6 ticks live through Nov 19 |
-| **Verify every claim** (read-only, ~15s) | `node scripts/verify-evidence.mjs` → **19/19 PASS** |
-| **All tests** | `npm run install:all && npm test` → 16 passing (8 contract math, 8 agent rules) |
+| **Verify every claim** (read-only, ~15s) | `node scripts/verify-evidence.mjs` → **21/21 PASS** |
+| **All tests** | `npm run install:all && npm test` → 20 passing (11 contract math, 9 agent rules) |
 | **Demo script** | [`DEMO.md`](./DEMO.md) |
 
 ### Where this fits
@@ -23,7 +23,8 @@ Economy**, **AI Security & Defense**.
 | Invoices / prepayment | a period or a deliverable | no; you dispute afterwards | humans, later |
 | Time-based streaming (Sablier, Superfluid) | elapsed time | no; time passing is enough | the payer, manually |
 | Per-request payments (e.g. x402) | each call | yes, per call; not suited to continuous work | n/a |
-| **NEAR Stream** | **verified elapsed time** | **yes, within the heartbeat window** | **the watchdog's silence freezes it; the guardian cancels it** |
+| Outage compensation (SLA escrows) | nothing extra; refunds *after* an outage | no; pays out afterwards | oracles, after the fact |
+| **NEAR Stream** | **verified elapsed time** | **yes, within the heartbeat window** | **k of n watchdogs going silent freezes it; the guardian cancels it** |
 
 Lump-sum payroll and invoicing require trust: the payer has to trust the payee
 delivered before paying, or the payee has to trust the payer will pay at all.
@@ -45,6 +46,12 @@ human in the loop. Delivery resumes, attestation resumes, payout resumes. The
 sender can cancel at any moment and is guaranteed a refund of everything
 beyond the last-attested-safe point.
 
+**No single watchdog to trust.** A stream can require **any k of n independent
+watchdogs** (e.g. 2 of 3) to keep attesting. One watchdog that's down, buggy, or
+malicious can't freeze a healthy stream on its own, and one that's colluding with
+the provider can't keep a dead stream paid on its own. Both are verified live on
+testnet below.
+
 On the payer's side, the **guardian** (`agent/guardian.mjs`) watches the
 payer's streams. If one stays frozen past a grace period, it cancels it: the
 receiver keeps exactly what was verified, and the rest returns to the payer.
@@ -63,8 +70,9 @@ primitive, not a smart-contract wrapper.
 ## How it works
 
 1. A sender locks NEAR into the contract, naming a receiver and a duration.
-2. **Optionally**, the sender also names a `verifier` and a `heartbeat`
-   window. If set, the verifier must call `attest` at least that often.
+2. **Optionally**, the sender also names verifiers (one, or k of n) and a
+   `heartbeat` window. The stream counts as attested at time T once at least k
+   distinct verifiers have attested at or after T.
 3. The contract computes, on every call, how much has "unlocked": normally
    `totalAmount * elapsedSeconds / durationSeconds`; if a heartbeat is
    configured and has lapsed, elapsed time is capped at the last attestation's
@@ -177,6 +185,15 @@ signed by the attest-only key.
 | Guardian key tries to **transfer NEAR** | rejected by protocol: `Access key requires full access` |
 | Guardian key tries to call **`withdraw`** / **`create_stream`** | rejected by protocol: `Access key does not allow method ...` |
 
+### k-of-n watchdogs, verified (stream 9: 2 of 3)
+
+| What | Evidence |
+|---|---|
+| Stream gated 2-of-3 on three separate verifier accounts, each with its own attest-only key | [`8km39Ea36D...`](https://explorer.testnet.near.org/transactions/8km39Ea36DyVkEmMksLnnrps2YBRk95FP9E3xquqgRJN) + key scopes checked by the verifier script |
+| All three watchdogs attesting independently | e.g. [`JAE3whzjg5...`](https://explorer.testnet.near.org/transactions/JAE3whzjg5VgBEem7xL9T8wa7PjuRzFuthYcnhduLCFt), [`39BQq8EibG...`](https://explorer.testnet.near.org/transactions/39BQq8EibGuDLdRnS29z91zYHMWYRmpqCfef3SSeSv6c), [`6wxpKF8eEy...`](https://explorer.testnet.near.org/transactions/6wxpKF8eEy2drqC35rwC7AJ35DteUhWsi6yZuSdTKbwG) |
+| Killed watchdog C → **payment kept flowing** (`withdrawable` 0.00967 → 0.01067 NEAR across reads) | `get_stream` reads |
+| Killed watchdog B too → **froze**, even though watchdog A kept attesting successfully | A's still-succeeding attest: [`FxVsiwXa8M...`](https://explorer.testnet.near.org/transactions/FxVsiwXa8MNGekgBWBy1tipv4qrD2DddJ8URTkhWSbe3); the verifier script checks it landed *after* the stream's effective deadline |
+
 ## Setup — contract
 
 ```bash
@@ -278,8 +295,11 @@ GUARDIAN_STREAM_IDS=<stream-id> npm run guardian   # omit the filter to guard al
   amount rather than "catching up" gradually from the freeze point (see
   `DECISIONS.md`). There's no dispute/arbitration step beyond that — it's a
   binary attest/don't-attest signal, not a partial-quality score.
-- A stream has at most one verifier; no support for multi-party attestation
-  (e.g. 2-of-3 oracles) in this version.
+- **Gas economics:** each `attest` burns ~13 Tgas (≈0.0013 NEAR), since a
+  JavaScript (QuickJS) contract is gas-heavy. The demo checks every 5s for
+  visibility; real deployments would attest every 1–5 minutes (≈0.4–1.9
+  NEAR/day per watchdog). A Rust port of the contract would cut that several-fold.
+  Watchdog keys need a gas allowance sized for their runtime (`DECISIONS.md`).
 - The watchdog can only verify what's observable from outside. A worker that
   fakes fresh, progressing output would fool it. The demo check is freshness +
   progress + format; real deployments would swap in a domain check (e.g.

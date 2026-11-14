@@ -11,15 +11,26 @@ always able to cancel and reclaim whatever hasn't streamed yet.
 
 That alone is a known pattern (think Sablier/Superfluid, but on NEAR). The
 part that doesn't exist elsewhere: **a stream can be gated on a verifier's
-heartbeat.** Point this at an AI agent getting paid for ongoing work, or a
-contractor on a retainer, and name a verifier (an oracle, a DAO vote, another
-agent, anything that can sign a transaction) who must periodically attest the
-work is still good. Stop delivering — the verifier stops attesting — and the
-payout **freezes automatically**, no dispute process, no human in the loop.
-Start delivering again and attestation releases the real elapsed amount
-immediately. The sender can cancel at any moment and is guaranteed a refund of
-everything beyond the last-attested-safe point — a real, enforced spending
-circuit breaker for autonomous agents, not just a progress bar.
+heartbeat, and the verifier is an autonomous agent.**
+
+The included **SLA watchdog** (`agent/`) checks a paid service every few
+seconds. While the service is verifiably delivering (fresh, well-formed,
+progressing work), the watchdog calls `attest` on-chain. When delivery stops —
+the server dies, *or* the server stays up and answers `200` but quietly stops
+producing work (the failure a plain uptime check misses) — the watchdog stops
+attesting and the payout **freezes automatically**. No dispute, no invoice, no
+human in the loop. Delivery resumes, attestation resumes, payout resumes. The
+sender can cancel at any moment and is guaranteed a refund of everything
+beyond the last-attested-safe point.
+
+**Why this needs NEAR specifically:** the watchdog signs with a NEAR
+**function-call access key** scoped to exactly one method (`attest`) on
+exactly one contract. NEAR enforces that scope at the protocol level, so a
+compromised watchdog host can keep or stop vouching, and nothing else. It
+can't move funds, call `cancel`/`withdraw`, or touch any other contract.
+Verified on testnet (below): every one of those attempts is rejected by the
+chain itself. That's a sandboxed agent wallet with a hard spending boundary,
+built from a native NEAR account primitive, not from a smart-contract wrapper.
 
 ## How it works
 
@@ -37,6 +48,9 @@ circuit breaker for autonomous agents, not just a progress bar.
 
 ## Why NEAR
 
+- **Function-call access keys** (above) give the verifier agent a
+  protocol-enforced, single-method, non-custodial key. That's the security model
+  for letting an autonomous agent touch a payment stream at all.
 - Sub-cent gas costs make per-second, many-small-transaction settlement
   actually practical (a stream with thousands of partial withdrawals would be
   uneconomical on most other chains).
@@ -52,8 +66,25 @@ circuit breaker for autonomous agents, not just a progress bar.
 ```
 contract/   near-sdk-js (TypeScript) smart contract, compiled to WASM
 frontend/   Vite + TypeScript, NEAR Wallet Selector, talks to the contract
-            directly over the public testnet RPC (no backend server)
+            directly over a public testnet RPC (no backend server)
+agent/      worker.mjs   — demo paid service (produces work every 2s)
+            watchdog.mjs — autonomous verifier; attests via a scoped key
+            check.mjs    — the deterministic delivery check (unit-tested)
 ```
+
+```
+ paid service ──(GET /work every 5s)──▶ watchdog ──attest() via scoped key──▶ stream contract
+                                            │                                     │
+                     fresh + valid + progressing?  no ──▶ stays silent ──▶ payout freezes
+                                                                                  ▼
+                                                                  frontend reads state, shows countdown
+```
+
+- **Agent** (`agent/`): the delivery check is deterministic, with no LLM in the
+  path. It attests only if the payload is well-formed, the latest work is fresh
+  (≤ 2× the check interval old), and the sequence number advanced since the
+  last attestation. Checks run sequentially, never overlapping, because two
+  concurrent transactions from one access key would collide on its nonce.
 
 - **Contract** (`contract/src/index.ts`): one `UnorderedMap<Stream>`, four
   `@call` methods (`create_stream`, `attest`, `withdraw`, `cancel`) and two
@@ -89,6 +120,18 @@ sender, receiver) — not just checked via a success/failure status:
 That last one is the actual proof of the circuit-breaker claim: the sender was
 protected from paying for ~15 unverified seconds, recovering 95% of the stream
 instead of the ~80% a plain linear split would have given back.
+
+### The autonomous watchdog, verified
+
+| What | Evidence |
+|---|---|
+| Scoped key registered on the verifier: `attest` only, on the stream contract only | [`Fbq7a2aYNo...`](https://explorer.testnet.near.org/transactions/Fbq7a2aYNoQ5fWQBnhh3xxc1PpJxyycGoLP26gRUNywc) |
+| Watchdog attesting stream 5 on its own (no human) | [`59MdeFRME5...`](https://explorer.testnet.near.org/transactions/59MdeFRME5GXgLb5WQzYn4USzSRhnrFSZFHS6V7JNsGD), [`2HtMF5s9WY...`](https://explorer.testnet.near.org/transactions/2HtMF5s9WYvgbmJn5wTZn4UCvcpMrXmwJySTEJt87Wna) |
+| Worker `POST /stall` (still answering 200) → watchdog logged `stale work`, stopped attesting → `withdrawable` identical across two on-chain reads 8s apart | watchdog log + `get_stream` reads |
+| Worker `POST /resume` → watchdog attested again → payout resumed | [`CTtAbSqAHP...`](https://explorer.testnet.near.org/transactions/CTtAbSqAHPRxkh3ZHY5d2zFb7oLFCmhvYeEMkKXEVnQS) |
+| Same key tries to **transfer NEAR** (even 0.001) | rejected by protocol: `Access key requires full access` |
+| Same key tries to call **`cancel`** | rejected by protocol: `Access key does not allow method cancel` |
+| Same key tries to call another contract | rejected by protocol: `Access key receiver ... does not match transaction receiver` |
 
 ## Setup — contract
 
@@ -132,6 +175,38 @@ just don't attest — watch the stream card flip to "stalled — accrual frozen"
 once the window lapses, and sign in as the verifier to send an `attest` and
 watch it release.
 
+## Setup — the autonomous watchdog (the main demo)
+
+Needs a verifier account you control in near CLI's keychain (any testnet account
+other than the stream's receiver).
+
+```bash
+cd agent
+npm install
+npm test                                        # 5 tests for the delivery check
+node keygen.mjs <verifier>.testnet <contract-id>  # writes .env (gitignored), prints a command
+# run the printed `near account add-key ... grant-function-call-access ...` command
+#   -> registers the key as attest-only on that one contract
+```
+
+Create a stream with that verifier (UI or CLI; use a heartbeat of ~20s), put
+its id in `agent/.env` as `STREAM_ID=`, then in two terminals:
+
+```bash
+npm run worker      # the paid service
+npm run watchdog    # the autonomous verifier
+```
+
+**Do → See:**
+- Watch the stream in the frontend → "verified & streaming", with a live
+  "payout freezes in Ns" countdown that keeps resetting.
+- `curl -X POST localhost:8787/stall` → the watchdog prints `✗ not attesting:
+  stale work`; within the heartbeat window the card flips to **"stalled —
+  accrual frozen"** and the unlocked amount stops moving.
+- `curl -X POST localhost:8787/resume` → `✓ attested`, the card goes back to
+  streaming, and the amount jumps to the real elapsed value.
+- Kill the worker with Ctrl-C → same freeze, from an outage instead of a stall.
+
 ## Known limitations
 
 - The live-ticking "withdrawable" number in the UI uses the browser's clock
@@ -146,6 +221,15 @@ watch it release.
   binary attest/don't-attest signal, not a partial-quality score.
 - A stream has at most one verifier; no support for multi-party attestation
   (e.g. 2-of-3 oracles) in this version.
+- The watchdog can only verify what's observable from outside. A worker that
+  fakes fresh, progressing output would fool it. The demo check is freshness +
+  progress + format; real deployments would swap in a domain check (e.g.
+  verifying an output against a known answer, or an oracle feed).
+- The demo worker and watchdog run on one machine; in production they'd be
+  operated by different parties (the watchdog by the payer or a neutral third
+  party).
+- The frontend uses FastNEAR's public testnet RPC: `rpc.testnet.near.org` is
+  deprecated and rejects browser requests as of Nov 2026.
 - Three wallet modules (Bitte, Here, Meteor) are wired up; Wallet Selector
   supports more, but none beyond that are configured for this demo.
 - No storage-deposit accounting for a very large number of concurrent

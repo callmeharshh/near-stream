@@ -214,6 +214,14 @@ button.secondary {
   font-size: 0.8rem;
 }
 
+.guard-hint strong {
+  color: var(--accent);
+}
+
+.guard-hint.frozen strong {
+  color: #f0a8d8;
+}
+
 .parties {
   display: flex;
   flex-wrap: wrap;

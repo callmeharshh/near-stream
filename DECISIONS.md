@@ -61,6 +61,31 @@ browser bundles. Fixed with a minimal manual shim in `frontend/src/polyfills.ts`
 (imported first, before any near-wallet-selector module) rather than pulling in a
 full polyfill plugin for three globals.
 
+## The watchdog signs with a function-call access key, not a full-access key
+
+The verifier agent runs unattended on a server, which makes its key the most
+exposed secret in the system. It gets a NEAR function-call access key restricted to
+`attest` on the stream contract only, with a 0.25 NEAR gas allowance. NEAR enforces
+that scope itself. Tested on testnet: the key's attempts to transfer NEAR
+(`Access key requires full access`), call `cancel`, or call any other contract are
+all rejected by the chain. A stolen watchdog key can at worst keep a stream alive
+that should freeze. It can never move money.
+
+## The delivery check is deterministic; no LLM in the attest path
+
+`agent/check.mjs` attests only on fresh, well-formed, progressing output. An LLM
+judging work quality would be a natural extension, but putting a model directly in
+the path that releases money adds a prompt-injection surface and a flaky external
+dependency for a live demo. Business rules stay in plain code.
+
+## Frontend RPC switched to FastNEAR
+
+`rpc.testnet.near.org` began returning `429 ... THIS ENDPOINT IS DEPRECATED` and
+failing browser CORS preflights on 2026-11-14, which made the frontend unable to
+read any streams. Lava's testnet endpoint returns `410 discontinued`. Switched the
+frontend and agent to `https://test.rpc.fastnear.com` (CORS `*`, verified working);
+the wallet selector already defaults to FastNEAR for testnet.
+
 ## The heartbeat freeze is a cap, not a true pause
 
 When a verifier-gated stream's heartbeat lapses, `accruedAmount` clamps the

@@ -65,6 +65,15 @@ function progressPct(stream: RawStream): number {
   return Math.min(100, pct);
 }
 
+function heartbeatReadout(stream: RawStream, stalled: boolean): string {
+  const sinceAttest = Math.max(0, Math.floor((Date.now() - Number(BigInt(stream.lastAttestedAt!) / 1_000_000n)) / 1000));
+  const window = Number(stream.heartbeatSeconds);
+  const detail = stalled
+    ? `<strong>Payout frozen</strong> — no attestation for ${sinceAttest}s (window ${window}s). The sender can cancel at the frozen amount; the next attestation releases the real elapsed amount.`
+    : `Last attestation ${sinceAttest}s ago · payout freezes in <strong>${window - sinceAttest}s</strong> unless the verifier attests again.`;
+  return `<p class="hint guard-hint ${stalled ? "frozen" : ""}">${detail}</p>`;
+}
+
 function streamCard(stream: RawStream): string {
   const youAreReceiver = accountId === stream.receiver;
   const youAreSender = accountId === stream.sender;
@@ -116,15 +125,7 @@ function streamCard(stream: RawStream): string {
         <span>${near(stream.totalAmount)} total</span>
         <span>${near((BigInt(stream.withdrawn) + withdrawable).toString())} unlocked</span>
       </div>
-      ${
-        guarded
-          ? `<p class="hint guard-hint">${
-              stalled
-                ? "No attestation within the heartbeat window — payout is frozen, protecting the sender. An attestation will release the real elapsed amount immediately."
-                : `Requires an attestation from the verifier at least every ${stream.heartbeatSeconds}s, or payout freezes.`
-            }</p>`
-          : ""
-      }
+      ${guarded && !stream.closed ? heartbeatReadout(stream, stalled) : ""}
       ${actions.length ? `<div class="actions">${actions.join("")}</div>` : ""}
     </article>
   `;
@@ -156,8 +157,9 @@ function render() {
           <li>Sender locks NEAR, naming a receiver and a duration.</li>
           <li>The unlocked amount grows every second — watch it tick below.</li>
           <li>Receiver withdraws anytime; sender can cancel anytime for a refund of the remainder.</li>
-          <li><strong>Optional:</strong> gate it on a verifier's heartbeat — built for paying an AI agent
-            or contractor only while their work is still being vouched for. Miss a heartbeat and payout
+          <li><strong>Optional:</strong> gate it on a verifier's heartbeat — e.g. an autonomous watchdog
+            agent that checks the paid service and attests while it's really delivering, using a NEAR key
+            that can call <code>attest</code> and nothing else. Delivery stops → attestations stop → payout
             freezes automatically, no dispute needed; the sender can safely cancel at the frozen amount.</li>
         </ol>
         <p class="hint">
@@ -290,8 +292,9 @@ async function boot() {
     if (streams.length) render();
   }, 1000);
 
-  // Re-sync with chain periodically in case another tab/account changed state.
-  setInterval(refreshStreams, 15000);
+  // Re-sync with chain often: an off-page watchdog agent attests every few seconds, and a
+  // refresh slower than the heartbeat window would show a falsely "frozen" stream.
+  setInterval(() => refreshStreams().catch(() => {}), 4000);
 }
 
 boot();

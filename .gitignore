@@ -3,3 +3,4 @@ contract/build/
 frontend/dist/
 .DS_Store
 *.log
+.env

@@ -7,6 +7,8 @@ const SENDER = "near-stream-sender-1794591135.testnet";
 const RECEIVER = "near-stream-receiver-1794591135.testnet";
 const VERIFIER = "near-stream-verifier-1794591135.testnet";
 const WATCHDOG_KEY = "ed25519:7f5SKkkXzjvvsNbVc2wws62QFkpQHTHbgAyPuytcXbUg";
+const GUARDIAN_KEY = "ed25519:ByaLcyWJrG6qrNiAicC7jjW6NZHVd1EuDNhAFcbdxnwU";
+const GUARDIAN_CANCEL_TX = "4pq5Hmd2WCvWhjU9xGWafmxHTjiozd5518oBsUFF49D4";
 
 async function rpc(method, params) {
   const res = await fetch(RPC, {
@@ -73,6 +75,27 @@ check("watchdog key is scoped on-chain: FunctionCall, `attest` only, this contra
   const perm = keys.find((k) => k.public_key === WATCHDOG_KEY)?.access_key.permission;
   const fc = perm?.FunctionCall;
   return Boolean(fc) && fc.receiver_id === CONTRACT && fc.method_names.length === 1 && fc.method_names[0] === "attest";
+});
+
+check("guardian key is scoped on-chain: FunctionCall, `cancel` only, this contract only", async () => {
+  const key = await rpc("query", {
+    request_type: "view_access_key",
+    finality: "final",
+    account_id: SENDER,
+    public_key: GUARDIAN_KEY,
+  });
+  const fc = key.permission?.FunctionCall;
+  return Boolean(fc) && fc.receiver_id === CONTRACT && fc.method_names.length === 1 && fc.method_names[0] === "cancel";
+});
+
+check("guardian auto-cancel of frozen stream 8 succeeded AND was signed by the cancel-only key", async () => {
+  const t = await tx(GUARDIAN_CANCEL_TX, SENDER);
+  return succeeded(t) && t.transaction.public_key === GUARDIAN_KEY && t.transaction.actions[0]?.FunctionCall?.method_name === "cancel";
+});
+
+check("stream 8 closed with the receiver paid only for verified time (rest auto-refunded)", async () => {
+  const s = await view("get_stream", { stream_id: 8 });
+  return s.closed && BigInt(s.withdrawn) > 0n && BigInt(s.withdrawn) < BigInt(s.totalAmount) / 10n;
 });
 
 check("stalled-stream cancel paid the receiver only the frozen 5s cap (0.025 of 0.5 NEAR)", async () => {

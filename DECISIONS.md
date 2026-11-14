@@ -78,6 +78,17 @@ account permanently unmanageable (no way to rotate the watchdog key); for a
 production verifier you'd keep it on a hardware wallet. The verifier script checks
 that every watchdog transaction was signed by the attest-only key specifically.
 
+## Why `cancel` is safe to hand to an unattended agent
+
+The guardian gets a function-call key for `cancel` on the payer's account. That's
+safe because of how the contract defines `cancel`: it requires the caller to be the
+stream's sender, pays the receiver only what was verified, and refunds the rest to
+the sender. There's no parameter that can redirect funds. A stolen guardian key can
+at worst end a stream early (the receiver still gets every verified second); it can
+never move money to a third party. The guardian also can't *create* streams, and it
+couldn't even if it were given that method: function-call keys can't attach NEAR
+deposits, and `create_stream` is payable.
+
 ## The delivery check is deterministic; no LLM in the attest path
 
 `agent/check.mjs` attests only on fresh, well-formed, progressing output. An LLM

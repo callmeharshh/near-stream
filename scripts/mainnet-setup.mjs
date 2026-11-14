@@ -35,8 +35,16 @@ function loadKeys() {
 }
 const accountOf = (k) => new Account(k.accountId, RPC, k.secretKey);
 
+function ensureGuardianKey(keys) {
+  if (keys.guardian) return keys;
+  const kp = KeyPair.fromRandom("ed25519");
+  keys.guardian = { publicKey: kp.getPublicKey().toString(), secretKey: kp.toString() }; // added to the sender account
+  writeFileSync(KEYS, JSON.stringify(keys, null, 2), { mode: 0o600 });
+  return keys;
+}
+
 function makeKeys() {
-  if (existsSync(KEYS)) return loadKeys();
+  if (existsSync(KEYS)) return ensureGuardianKey(loadKeys());
   mkdirSync(DIR, { recursive: true, mode: 0o700 });
   const keys = {};
   for (const role of ["contract", "sender", "receiver", "verifier", "watchdog"]) {
@@ -45,7 +53,7 @@ function makeKeys() {
   }
   delete keys.watchdog.accountId; // the watchdog key is added to the verifier account, not its own account
   writeFileSync(KEYS, JSON.stringify(keys, null, 2), { mode: 0o600 });
-  return keys;
+  return ensureGuardianKey(keys);
 }
 
 async function balance(accountId) {
@@ -73,7 +81,7 @@ if (command === "keys") {
   console.log(`Fund this mainnet address with ~7.5 NEAR (NEAR network only):\n\n  ${keys.contract.accountId}\n`);
   console.log(`Current balance: ${formatNearAmount(have.toString(), 4)} NEAR`);
 } else if (command === "deploy") {
-  const keys = loadKeys();
+  const keys = makeKeys();
   const have = await balance(keys.contract.accountId);
   if (have < BigInt(MIN_FUNDING)) {
     console.error(`contract account has ${formatNearAmount(have.toString(), 4)} NEAR; needs >= 6.5 NEAR. Not deploying.`);
@@ -99,6 +107,14 @@ if (command === "keys") {
   });
   record({ step: "register attest-only watchdog key on verifier", tx: hashOf(keyTx) });
 
+  const guardianKeyTx = await accountOf(keys.sender).addFunctionCallAccessKey({
+    publicKey: keys.guardian.publicKey,
+    contractId: keys.contract.accountId,
+    methodNames: ["cancel"],
+    allowance: parseNearAmount("0.05"),
+  });
+  record({ step: "register cancel-only guardian key on sender", tx: hashOf(guardianKeyTx) });
+
   const created = await accountOf(keys.sender).callFunctionRaw({
     contractId: keys.contract.accountId,
     methodName: "create_stream",
@@ -123,6 +139,22 @@ if (command === "keys") {
       CONTRACT_ID: keys.contract.accountId,
       RPC_URL: RPC,
       STREAM_ID: arg ?? "0",
+    },
+  });
+} else if (command === "guardian") {
+  const { spawn } = await import("node:child_process");
+  const keys = loadKeys();
+  const agentDir = join(dirname(fileURLToPath(import.meta.url)), "../agent");
+  spawn(process.execPath, ["guardian.mjs"], {
+    cwd: agentDir,
+    stdio: "inherit",
+    env: {
+      ...process.env,
+      GUARDIAN_ACCOUNT_ID: keys.sender.accountId,
+      GUARDIAN_PRIVATE_KEY: keys.guardian.secretKey,
+      CONTRACT_ID: keys.contract.accountId,
+      RPC_URL: RPC,
+      GRACE_SECONDS: process.env.GRACE_SECONDS ?? "15",
     },
   });
 } else if (command === "cancel") {

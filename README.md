@@ -3,17 +3,27 @@
 Built for **NEAR HACKATHON 2026**, tracks: **Real-World Money**, **Agent
 Economy**, **AI Security & Defense**.
 
-> **Pay agents and APIs per second, only while they deliver.** An autonomous
-> watchdog attests on-chain while work is really happening; when it stops,
-> payment freezes by itself. The watchdog's NEAR key can call `attest` and
-> nothing else, so even a hacked watchdog can't move a coin.
+> **Pay agents and APIs per second, only while they deliver.** A watchdog agent
+> attests on-chain while work is really happening; when it stops, payment
+> freezes by itself, and a guardian agent cancels and brings the unverified
+> money home. No human in the loop on either side. Each agent's NEAR key can do
+> exactly one safe thing, so even a hacked agent can't move a coin.
 
 | | |
 |---|---|
 | **Live app** (testnet, no install) | **https://callmeharshh.github.io/near-stream/** — stream #6 ticks live through Nov 19 |
-| **Verify every claim** (read-only, ~10s) | `node scripts/verify-evidence.mjs` → **16/16 PASS** |
-| **All tests** | `npm run install:all && npm test` → 13 passing (8 contract math, 5 agent check) |
+| **Verify every claim** (read-only, ~15s) | `node scripts/verify-evidence.mjs` → **19/19 PASS** |
+| **All tests** | `npm run install:all && npm test` → 16 passing (8 contract math, 8 agent rules) |
 | **Demo script** | [`DEMO.md`](./DEMO.md) |
+
+### Where this fits
+
+| | Pays for | Stops paying when the work stops? | Who stops it |
+|---|---|---|---|
+| Invoices / prepayment | a period or a deliverable | no; you dispute afterwards | humans, later |
+| Time-based streaming (Sablier, Superfluid) | elapsed time | no; time passing is enough | the payer, manually |
+| Per-request payments (e.g. x402) | each call | yes, per call; not suited to continuous work | n/a |
+| **NEAR Stream** | **verified elapsed time** | **yes, within the heartbeat window** | **the watchdog's silence freezes it; the guardian cancels it** |
 
 Lump-sum payroll and invoicing require trust: the payer has to trust the payee
 delivered before paying, or the payee has to trust the payer will pay at all.
@@ -35,14 +45,20 @@ human in the loop. Delivery resumes, attestation resumes, payout resumes. The
 sender can cancel at any moment and is guaranteed a refund of everything
 beyond the last-attested-safe point.
 
-**Why this needs NEAR specifically:** the watchdog signs with a NEAR
-**function-call access key** scoped to exactly one method (`attest`) on
-exactly one contract. NEAR enforces that scope at the protocol level, so a
-compromised watchdog host can keep or stop vouching, and nothing else. It
-can't move funds, call `cancel`/`withdraw`, or touch any other contract.
-Verified on testnet (below): every one of those attempts is rejected by the
-chain itself. That's a sandboxed agent wallet with a hard spending boundary,
-built from a native NEAR account primitive, not from a smart-contract wrapper.
+On the payer's side, the **guardian** (`agent/guardian.mjs`) watches the
+payer's streams. If one stays frozen past a grace period, it cancels it: the
+receiver keeps exactly what was verified, and the rest returns to the payer.
+Nobody has to notice, decide, or press a button.
+
+**Why this needs NEAR specifically:** each agent signs with a NEAR
+**function-call access key** scoped to exactly one method on exactly one
+contract. The watchdog's key can only `attest`; the guardian's can only
+`cancel`, and this contract's `cancel` can only refund the payer and pay the
+receiver for verified time. NEAR enforces those scopes at the protocol level.
+Verified on testnet (below): both keys' attempts to transfer NEAR, call other
+methods, or touch other contracts are rejected by the chain itself. These are
+sandboxed agent wallets with hard boundaries, built from a native NEAR account
+primitive, not a smart-contract wrapper.
 
 ## How it works
 
@@ -80,8 +96,9 @@ contract/   near-sdk-js (TypeScript) smart contract, compiled to WASM
 frontend/   Vite + TypeScript, NEAR Wallet Selector, talks to the contract
             directly over a public testnet RPC (no backend server)
 agent/      worker.mjs   — demo paid service (produces work every 2s)
-            watchdog.mjs — autonomous verifier; attests via a scoped key
-            check.mjs    — the deterministic delivery check (unit-tested)
+            watchdog.mjs — autonomous verifier; attests via an attest-only key
+            guardian.mjs — payer-side agent; cancels frozen streams via a cancel-only key
+            check.mjs    — the deterministic delivery check + guardian rule (unit-tested)
 ```
 
 ```
@@ -151,6 +168,15 @@ signed by the attest-only key.
 | Same key tries to call **`cancel`** | rejected by protocol: `Access key does not allow method cancel` |
 | Same key tries to call another contract | rejected by protocol: `Access key receiver ... does not match transaction receiver` |
 
+### The guardian, verified
+
+| What | Evidence |
+|---|---|
+| Guardian key on the payer account: `cancel` only, on the stream contract only | on-chain `view_access_key` (checked by the verifier script) |
+| Stream 8: watchdog attested, worker stalled, payout froze, and **the guardian cancelled it 19s into the freeze, with no human involved**. Receiver kept 0.0143 NEAR for 43s of verified work; **0.1857 NEAR returned to the payer automatically.** | [`4pq5Hmd2WC...`](https://explorer.testnet.near.org/transactions/4pq5Hmd2WCvWhjU9xGWafmxHTjiozd5518oBsUFF49D4) (signed by the cancel-only key) |
+| Guardian key tries to **transfer NEAR** | rejected by protocol: `Access key requires full access` |
+| Guardian key tries to call **`withdraw`** / **`create_stream`** | rejected by protocol: `Access key does not allow method ...` |
+
 ## Setup — contract
 
 ```bash
@@ -201,7 +227,7 @@ other than the stream's receiver).
 ```bash
 cd agent
 npm install
-npm test                                        # 5 tests for the delivery check
+npm test                                        # 8 tests: delivery check + guardian rule
 node keygen.mjs <verifier>.testnet <contract-id>  # writes .env (gitignored), prints a command
 # run the printed `near account add-key ... grant-function-call-access ...` command
 #   -> registers the key as attest-only on that one contract
@@ -224,6 +250,21 @@ npm run watchdog    # the autonomous verifier
 - `curl -X POST localhost:8787/resume` → `✓ attested`, the card goes back to
   streaming, and the amount jumps to the real elapsed value.
 - Kill the worker with Ctrl-C → same freeze, from an outage instead of a stall.
+
+**Add the guardian** (payer side). Generate a key, register it on the *sender*
+account as cancel-only, and put it in `agent/.env`:
+
+```bash
+near account add-key <sender>.testnet grant-function-call-access --allowance '0.25 NEAR' \
+  --contract-account-id <contract-id> --function-names 'cancel' \
+  use-manually-provided-public-key <guardian-public-key> network-config testnet sign-with-keychain send
+# agent/.env: GUARDIAN_ACCOUNT_ID=<sender>.testnet  GUARDIAN_PRIVATE_KEY=ed25519:...  GRACE_SECONDS=15
+GUARDIAN_STREAM_IDS=<stream-id> npm run guardian   # omit the filter to guard all of the sender's streams
+```
+
+- Stall the worker and don't resume → the guardian logs `… frozen Ns`, then
+  `✓ cancelled stream N … unverified funds returned`, and the card shows
+  **closed** with only the verified amount paid out.
 
 ## Known limitations
 

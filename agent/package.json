@@ -6,7 +6,8 @@
   "scripts": {
     "test": "node --test check.test.mjs",
     "worker": "node worker.mjs",
-    "watchdog": "node --env-file=.env watchdog.mjs"
+    "watchdog": "node --env-file=.env watchdog.mjs",
+    "guardian": "node --env-file=.env guardian.mjs"
   },
   "keywords": [],
   "author": "",

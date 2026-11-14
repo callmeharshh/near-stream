@@ -9,8 +9,8 @@ Autonomous Business, AI Security & Defense · **Live on NEAR mainnet** (real NEA
 |---|---|
 | **Mainnet contract** | [`85401b22…5d98`](https://explorer.near.org/accounts/85401b220a3d58edb6f98a7ddbc48598ee373314ae17ae1399f7cf2462c45d98): full agent flow ran with real NEAR ([transactions](./EVIDENCE.md#near-mainnet-real-near)) |
 | Live app (testnet, no install) | https://callmeharshh.github.io/near-stream/ |
-| Verify every on-chain claim (read-only) | `npm run verify` → **32/32 PASS** (incl. 5 mainnet checks) ([what it checks](./EVIDENCE.md)) |
-| Tests | `npm run install:all && npm test` → **29 passing** (+5 Rust: `cd contract-rs && cargo test`) |
+| Verify every on-chain claim (read-only) | `npm run verify` → **33/33 PASS** (incl. 5 mainnet checks) ([what it checks](./EVIDENCE.md)) |
+| Tests | `npm run install:all && npm test` → **31 passing** (+5 Rust: `cd contract-rs && cargo test`) |
 | All transactions | [`EVIDENCE.md`](./EVIDENCE.md) |
 | Design decisions & gotchas | [`DECISIONS.md`](./DECISIONS.md) |
 
@@ -63,12 +63,46 @@ Re-checked by `npm run verify`. Full transaction list in [`EVIDENCE.md`](./EVIDE
 | Per-second streams: create, withdraw, cancel | balances reconciled across contract, sender, receiver |
 | **Only verified time is paid** | stream 12: 166s of wall-clock time, 64.1s verified → provider paid 0.0641 NEAR; a 45s outage and the pre-attestation start were excluded (the old clock model would have paid ~0.166) |
 | Real service, checked for correctness | watchdog verified live NEAR blocks against a reference RPC; rejected stale data, a forged block hash, and future timestamps |
+| Replay attack rejected | service served a genuine 10-minute-old block with a forged fresh timestamp → rejected (freshness comes only from the reference header; last height persists across watchdog restarts) |
+| **One dishonest watchdog can't authorize payment** | stream 13 (2-of-3): during an outage the dishonest watchdog kept attesting, its txs succeeded on-chain, and verified time stayed flat; payout = verified time only |
 | Autonomous watchdog | attests on its own; stops when the service fails; resumes when it recovers |
 | k-of-n watchdogs | 2-of-3 stream kept paying with one watchdog down, froze with two down |
 | Guardian auto-cancel | cancelled a frozen stream with no human; refund returned to payer |
 | Scoped agent keys | both agents' keys were rejected by the protocol when trying to transfer funds or call other methods |
 | NEP-141 token streams | wNEAR stream: withdraw + guardian cancel; payouts sum to exactly the stream total |
 | Failed token payouts roll back | payout to an unregistered receiver failed, stayed claimable, succeeded after registration |
+
+## What exactly is guaranteed
+
+Payment is based on **sampled delivery checks**, not continuous proof. With a check
+interval *I* (5s in the demo) and a heartbeat *H* (15–20s in the demo):
+
+- **Paid:** the time between two consecutive quorum attestations, if they are at most
+  *H* apart.
+- **Never paid:** time before the first quorum attestation, and any gap longer than *H*
+  (if an outage makes the gap exceed *H*, none of that gap is paid, even after recovery).
+- **Worst case (the honest limit):** an outage that falls entirely between two
+  successful samples less than *H* apart goes undetected and is paid, so up to *H*
+  seconds per incident. Detecting a failure takes up to one interval *I*. Keep *H*
+  close to *I* (e.g. *H* = 2*I*) to keep this small.
+- **Each watchdog checks:** the data matches an independent reference RPC (hash and
+  timestamp), freshness judged from the *reference* header, no future dates, and
+  progress since its last attestation (persisted across restarts).
+
+## Economics (measured on mainnet)
+
+From transaction receipts (`node scripts/gas-report.mjs`): one `attest` burns
+**0.000186 NEAR**, a guardian `cancel` incl. payouts **0.001863 NEAR**.
+
+| Check interval | Verification cost per watchdog per hour | vs. a 1 NEAR/hour stream |
+|---|---|---|
+| 5s (the demo, for visibility) | 0.134 NEAR | 13.4% |
+| 60s | 0.011 NEAR | 1.1% |
+| 300s | 0.0022 NEAR | 0.2% |
+
+A 2-of-3 quorum costs 3× the per-watchdog figure. The demo's 5s interval on a tiny
+0.05 NEAR/hour stream costs more than the stream pays out; real use needs minute-level
+intervals and/or larger streams. Who pays the watchdogs is on the roadmap.
 
 ## NEAR technology used
 
@@ -109,8 +143,9 @@ fit on the payer's side (funding streams from an Agent API wallet); that is **no
 **No NEAR account needed:**
 ```bash
 npm run install:all
-npm test          # 29 unit tests (verified-time accounting, k-of-n, delivery check, agents)
-npm run verify    # re-checks 32 on-chain claims (testnet + mainnet), read-only
+npm test          # 31 unit tests (verified-time accounting, k-of-n, delivery check, agents)
+npm run verify    # re-checks 33 on-chain claims (testnet + mainnet), read-only
+node scripts/gas-report.mjs   # mainnet gas per action, from transaction receipts
 ```
 Or open the [live app](https://callmeharshh.github.io/near-stream/): it reads the
 real contract; stream #6 keeps ticking until Nov 19.
@@ -147,11 +182,14 @@ scripts/    verify-evidence.mjs (read-only verifier), mainnet-setup.mjs (deploy 
   testnet. The mainnet run used small amounts (a 0.05 NEAR stream).
 - **Token streams were proven with wNEAR, not USDC.** We couldn't mint testnet
   USDC; the code is token-agnostic NEP-141, so USDC uses the same calls.
-- **What the watchdog can verify is domain-specific.** For the demo's RPC service it
-  checks correctness against a reference RPC. The reference is a separate FastNEAR
-  endpoint, not a different company; real use should pick an independent provider.
-- **Detection latency:** a failure is caught at the next check, so up to about one
-  check interval (5s in the demo) can be paid after a failure starts.
+- **Independence is demonstrated, not production-grade.** All watchdogs ran on one
+  machine operated by us, and every reference RPC is a FastNEAR endpoint (separate
+  endpoint, same company). The 2-of-3 logic is proven on-chain, including against a
+  dishonest watchdog; truly separate operators and providers are not.
+- **No full commercial flow:** the paid service is a real public data provider, but its
+  operator isn't the stream's receiver, and no app consumes the data. Stablecoin flow
+  is shown with wNEAR (NEP-141) on testnet, not USDC; no agent-driven purchase is shown.
+- **Sampled, not continuous:** see *What exactly is guaranteed*.
 - **Streams 0–11 on testnet use the earlier clock-based model** (an outage was paid
   after recovery). Verified-time accounting applies to streams created after the
   upgrade (stream 12 onward); the contract keeps old streams' recorded behavior.

@@ -3,6 +3,7 @@
 // function-call access key scoped to `attest` — if this process or its host is
 // compromised, the key still cannot move funds.
 import { Account } from "near-api-js";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { checkDelivery, classifyError, nextDelayMs } from "./check.mjs";
 
 const {
@@ -28,9 +29,21 @@ const intervalMs = Number(CHECK_INTERVAL_SECONDS) * 1000;
 const maxStalenessMs = Math.max(15_000, intervalMs * 2); // finalized blocks lag the head by a few seconds
 const streamId = Number(STREAM_ID);
 const account = new Account(NEAR_ACCOUNT_ID, RPC_URL, NEAR_PRIVATE_KEY);
+// Last attested height, persisted so a restart can't be used to replay older data.
+const STATE_DIR = new URL("./.watchdog-state/", import.meta.url);
+const stateFile = new URL(`${NEAR_ACCOUNT_ID}-${CONTRACT_ID}-${STREAM_ID}.json`, STATE_DIR);
 let lastHeight = null;
+try {
+  lastHeight = JSON.parse(readFileSync(stateFile, "utf8")).lastHeight ?? null;
+} catch {
+  // first run for this stream
+}
+const saveHeight = (h) => {
+  mkdirSync(STATE_DIR, { recursive: true });
+  writeFileSync(stateFile, JSON.stringify({ lastHeight: h }));
+};
 
-async function referenceHash(height) {
+async function referenceBlock(height) {
   try {
     const res = await fetch(REFERENCE_RPC, {
       method: "POST",
@@ -38,7 +51,8 @@ async function referenceHash(height) {
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "block", params: { block_id: height } }),
       signal: AbortSignal.timeout(4000),
     });
-    return (await res.json()).result?.header?.hash ?? null;
+    const header = (await res.json()).result?.header;
+    return header ? { hash: header.hash, timestampNanos: header.timestamp_nanosec } : null;
   } catch {
     return null;
   }
@@ -55,13 +69,20 @@ async function tick() {
     // unreachable worker is just a failed check
   }
 
-  const reference = Number.isInteger(body?.height) ? await referenceHash(body.height) : null;
-  const verdict = checkDelivery(body, reference, Date.now(), lastHeight, maxStalenessMs);
+  const reference = Number.isInteger(body?.height) ? await referenceBlock(body.height) : null;
+  // DISHONEST=1 simulates a compromised/bribed watchdog that attests no matter what. It
+  // exists only to demonstrate that k-of-n quorum stops one bad verifier from paying.
+  const verdict = process.env.DISHONEST === "1"
+    ? { ok: true, reason: "DISHONEST: attesting without checking" }
+    : checkDelivery(body, reference, Date.now(), lastHeight, maxStalenessMs);
   if (!verdict.ok) {
     console.log(`${time()}  ✗ not attesting: ${body ? verdict.reason : "service unreachable"}`);
     return;
   }
-  lastHeight = body.height;
+  if (process.env.DISHONEST !== "1") {
+    lastHeight = body.height;
+    saveHeight(lastHeight);
+  }
 
   try {
     const outcome = await account.callFunctionRaw({

@@ -205,6 +205,21 @@ check("verified-time accounting (stream 12): a 45s outage was NOT paid; payout =
   );
 });
 
+check("2-of-3 (stream 13): a DISHONEST watchdog's successful attests could not authorize payment alone", async () => {
+  const VERIFIER3 = "near-stream-verifier3-1794591135.testnet";
+  const dishonest = await tx("KdxrafRWcB7XiDtjAEMJyabp7GaSCSNsScVeQaCAm6s", VERIFIER3);
+  const block = await rpc("block", { block_id: dishonest.transaction_outcome.block_hash });
+  const s = await view("get_stream", { stream_id: 13 });
+  const expected = (BigInt(s.totalAmount) * BigInt(s.verifiedNanos)) / (BigInt(s.durationSeconds) * 1_000_000_000n);
+  return (
+    succeeded(dishonest) &&
+    s.threshold === 2 &&
+    BigInt(block.header.timestamp_nanosec) > BigInt(s.lastAttestedAt) && // its attest didn't move the quorum time
+    s.closed &&
+    BigInt(s.withdrawn) === expected
+  );
+});
+
 check("ungated live stream 6 accrues in real time (two reads 4s apart)", async () => {
   const a = BigInt((await view("get_stream", { stream_id: 6 })).withdrawable);
   await sleep(4000);

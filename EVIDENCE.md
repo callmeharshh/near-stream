@@ -3,7 +3,7 @@
 Every row below is a real NEAR **mainnet** or **testnet** transaction or on-chain read.
 `npm run verify` (`scripts/verify-evidence.mjs`) re-checks all of it read-only and
 checks properties, not just existence (e.g. which key signed a tx, exact payout
-amounts, that a frozen stream stays frozen). Last run: **32/32 PASS** (27 testnet + 5 mainnet).
+amounts, that a frozen stream stays frozen). Last run: **33/33 PASS** (28 testnet + 5 mainnet).
 
 ## NEAR mainnet (real NEAR)
 
@@ -46,6 +46,20 @@ Contract: [`near-stream-contract-1794591135.testnet`](https://explorer.testnet.n
 | 45s outage (stale data, HTTP 200) → rejected as stale; after recovery payout continued from where it stopped | watchdog log + `get_stream` reads |
 | Forged block hash → rejected (`doesn't match the reference`) | watchdog log |
 | Settled: 166s wall-clock, **64.1s verified**, provider paid **0.0641 NEAR** (= exactly verified time × rate) | [`4STyBK5mQV...`](https://explorer.testnet.near.org/transactions/4STyBK5mQVZCXgMCr84k47zyCbUdGGSWJDJvS6jZ41Jv) |
+
+## Dishonest watchdog vs. 2-of-3 quorum (stream 13)
+
+| What | Evidence |
+|---|---|
+| Stream gated 2-of-3 (watchdogs A, B honest; C run with `DISHONEST=1`, attesting without checking) | [`5DqVBn1s9d...`](https://explorer.testnet.near.org/transactions/5DqVBn1s9duGa1gqx1NDQMJGbH1jDZrQiVPwGdBAUjGf) |
+| Service broke; A and B refused; **C kept attesting and its txs succeeded** | e.g. [`KdxrafRWcB...`](https://explorer.testnet.near.org/transactions/KdxrafRWcB7XiDtjAEMJyabp7GaSCSNsScVeQaCAm6s) |
+| Verified time stayed flat (24.7s → 24.7s, reads 16s apart); settled paying exactly verified time | [`FQLz8MvSs8...`](https://explorer.testnet.near.org/transactions/FQLz8MvSs8WZYWL1WBc51z45AzozpMcmEutoo2oKmUj1) |
+
+## Replay attack (watchdog check)
+
+Service served a genuine block from ~10 minutes earlier with a forged fresh timestamp;
+a freshly started watchdog (no remembered height) rejected it: `timestamp doesn't match
+the reference block`. Regression tests: `agent/check.test.mjs` ("REPLAY …").
 
 Streams 0–11 below predate this upgrade and use the earlier clock-based model.
 

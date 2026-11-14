@@ -154,6 +154,14 @@ read any streams. Lava's testnet endpoint returns `410 discontinued`. Switched t
 frontend and agent to `https://test.rpc.fastnear.com` (CORS `*`, verified working);
 the wallet selector already defaults to FastNEAR for testnet.
 
+## Freshness is judged from the reference header, never from the service
+
+A second review found the watchdog trusted the service's own timestamp: a dishonest
+service could replay a genuine old block (hash matches the reference) with a fresh
+timestamp. Now the reference block's hash *and* timestamp must match, freshness uses
+the reference timestamp only, and the last attested height is persisted so a watchdog
+restart doesn't reopen replay. Demonstrated live and covered by regression tests.
+
 ## Superseded: verified-time accounting replaced the "cap" model
 
 An external review pointed out that the cap model (below) contradicted the core claim:

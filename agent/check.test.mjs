@@ -53,12 +53,14 @@ test("guardian: never touches streams it isn't the sender of, closed streams, or
 const now = Date.parse("2026-11-14T12:00:10.000Z");
 const nanosFromMs = (ms) => (BigInt(ms) * 1_000_000n).toString();
 const HASH = "4DTqsiGjP4KyXhyvQWmKLLs3vG9kqdbWMv9EsMYQY2Kr";
-const good = { height: 1000, hash: HASH, timestampNanos: nanosFromMs(now - 3000) };
-const check = (body, ref = HASH, last = 999) => checkDelivery(body, ref, now, last, 15_000);
+const freshTs = nanosFromMs(now - 3000);
+const good = { height: 1000, hash: HASH, timestampNanos: freshTs };
+const ref = { hash: HASH, timestampNanos: freshTs };
+const check = (body, reference = ref, last = 999) => checkDelivery(body, reference, now, last, 15_000);
 
 test("attests real, fresh, progressing data that matches the reference", () => {
   assert.equal(check(good).ok, true);
-  assert.equal(check(good, HASH, null).ok, true);
+  assert.equal(check(good, ref, null).ok, true);
 });
 
 test("refuses when the service is unreachable or returns nothing", () => {
@@ -66,11 +68,25 @@ test("refuses when the service is unreachable or returns nothing", () => {
 });
 
 test("refuses stale data even though the service answers (the /stall case)", () => {
-  assert.match(check({ ...good, timestampNanos: nanosFromMs(now - 60_000) }).reason, /stale/);
+  const old = nanosFromMs(now - 60_000);
+  assert.match(check({ ...good, timestampNanos: old }, { hash: HASH, timestampNanos: old }).reason, /stale/);
+});
+
+test("REPLAY: an old real block with a forged fresh timestamp is rejected", () => {
+  // hash is genuine for that height, but the reference says the block is 10 minutes old
+  const realOld = { hash: HASH, timestampNanos: nanosFromMs(now - 600_000) };
+  assert.match(check({ height: 1000, hash: HASH, timestampNanos: freshTs }, realOld).reason, /timestamp doesn't match/);
+});
+
+test("REPLAY after a watchdog restart (no remembered height): still rejected as stale", () => {
+  const realOld = { hash: HASH, timestampNanos: nanosFromMs(now - 600_000) };
+  assert.match(check({ height: 1000, hash: HASH, timestampNanos: realOld.timestampNanos }, realOld, null).reason, /stale/);
 });
 
 test("refuses a future-dated block (the 2099 timestamp case)", () => {
-  assert.match(check({ ...good, timestampNanos: nanosFromMs(Date.parse("2099-01-01T00:00:00Z")) }).reason, /future/);
+  const future = nanosFromMs(Date.parse("2099-01-01T00:00:00Z"));
+  assert.match(check({ ...good, timestampNanos: future }, { hash: HASH, timestampNanos: future }).reason, /future/);
+  assert.match(check({ ...good, timestampNanos: future }).reason, /doesn't match/); // and it can't fake the reference
 });
 
 test("refuses data that doesn't match the reference RPC (the /tamper case: wrong data)", () => {
@@ -82,7 +98,7 @@ test("refuses to attest when the reference can't be reached: unverified means un
 });
 
 test("refuses when the height didn't advance since the last attestation", () => {
-  assert.match(check(good, HASH, 1000).reason, /no progress/);
+  assert.match(check(good, ref, 1000).reason, /no progress/);
 });
 
 test("refuses malformed payloads", () => {

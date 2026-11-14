@@ -19,6 +19,11 @@ services only while they're delivered, with an agent that cuts them off), and
 | **Demo script** | [`DEMO.md`](./DEMO.md) |
 | **Mainnet** | Not deployed yet (needs ~7.5 NEAR of storage deposit). `scripts/mainnet-setup.mjs` deploys the whole system (contract, scoped watchdog + guardian keys, demo stream) in one command, and has been run end to end with `DRY_RUN=1` on testnet. |
 
+**For reviewers, with no NEAR account needed:** `npm run install:all && npm test`
+(20 unit tests), `npm run verify` (re-checks all 21 on-chain claims, read-only), and
+the hosted app above. Running the live agents yourself (watchdog, guardian) needs free
+testnet accounts from the faucet; see *Setup — the autonomous watchdog*.
+
 ### Where this fits
 
 | | Pays for | Stops paying when the work stops? | Who stops it |
@@ -130,7 +135,7 @@ agent/      worker.mjs   — demo paid service (produces work every 2s)
   `@call` methods (`create_stream`, `attest`, `withdraw`, `cancel`) and two
   `@view` methods (`get_stream`, `list_streams`). Accrual math — including the
   heartbeat-freeze logic — lives in `contract/src/stream-math.ts`, unit-tested
-  (8 tests) in isolation from the SDK.
+  (11 tests, including k-of-n) in isolation from the SDK.
 - **Frontend** (`frontend/src/`): `near.ts` wraps Wallet Selector + a
   `JsonRpcProvider` for reads; `main.ts` renders the UI and ticks the
   displayed "withdrawable" amount client-side between chain reads (always
@@ -202,7 +207,7 @@ signed by the attest-only key.
 ```bash
 cd contract
 npm install
-npm test            # unit tests for the accrual + heartbeat-freeze math (8 tests)
+npm test            # unit tests for accrual, heartbeat freeze and k-of-n math (11 tests)
 npm run build        # -> build/contract.wasm
 ```
 
@@ -247,7 +252,7 @@ other than the stream's receiver).
 ```bash
 cd agent
 npm install
-npm test                                        # 8 tests: delivery check + guardian rule
+npm test                                        # 9 tests: delivery check + guardian rule
 node keygen.mjs <verifier>.testnet <contract-id>  # writes .env (gitignored), prints a command
 # run the printed `near account add-key ... grant-function-call-access ...` command
 #   -> registers the key as attest-only on that one contract
@@ -285,6 +290,26 @@ GUARDIAN_STREAM_IDS=<stream-id> npm run guardian   # omit the filter to guard al
 - Stall the worker and don't resume → the guardian logs `… frozen Ns`, then
   `✓ cancelled stream N … unverified funds returned`, and the card shows
   **closed** with only the verified amount paid out.
+
+## Sustainability and roadmap
+
+**Who pays for verification today:** each watchdog pays its own gas (~0.0013 NEAR per
+attest, measured), and the payer runs the guardian. That's workable for a payer
+protecting its own spend, but there's no built-in incentive for *independent* watchdogs
+yet. The items below are **not built**; they're the path from hackathon project to
+something that sustains itself.
+
+- **Paid verification:** reserve a small, sender-chosen share of each stream for the
+  watchdogs that attested, so k-of-n verification is a service operators are paid to run.
+- **Stablecoin streams (NEP-141, e.g. USDC):** businesses budget in dollars; NEAR-only
+  streams are fine for a demo but not for real procurement.
+- **Rust contract port:** cut the ~13 Tgas attest cost several-fold, which makes
+  minute-level heartbeats nearly free.
+- **Mainnet:** the deploy script is ready and dry-run tested (`scripts/mainnet-setup.mjs`).
+
+**What keeps the codebase maintainable:** the money math is isolated in pure functions
+with unit tests, every on-chain claim is re-checkable with one command, and
+`DECISIONS.md` records each non-obvious design call.
 
 ## Known limitations
 

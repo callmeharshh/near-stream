@@ -13,6 +13,8 @@ const {
   WORKER_URL = "http://localhost:8787/work",
   CHECK_INTERVAL_SECONDS = "5",
   STREAM_ID,
+  // independent endpoint used to check that the service's data is real
+  REFERENCE_RPC = "https://archival-rpc.testnet.fastnear.com",
 } = process.env;
 
 for (const [name, value] of Object.entries({ NEAR_ACCOUNT_ID, NEAR_PRIVATE_KEY, CONTRACT_ID, STREAM_ID })) {
@@ -23,10 +25,24 @@ for (const [name, value] of Object.entries({ NEAR_ACCOUNT_ID, NEAR_PRIVATE_KEY, 
 }
 
 const intervalMs = Number(CHECK_INTERVAL_SECONDS) * 1000;
-const maxStalenessMs = intervalMs * 2;
+const maxStalenessMs = Math.max(15_000, intervalMs * 2); // finalized blocks lag the head by a few seconds
 const streamId = Number(STREAM_ID);
 const account = new Account(NEAR_ACCOUNT_ID, RPC_URL, NEAR_PRIVATE_KEY);
-let lastSequence = null;
+let lastHeight = null;
+
+async function referenceHash(height) {
+  try {
+    const res = await fetch(REFERENCE_RPC, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "block", params: { block_id: height } }),
+      signal: AbortSignal.timeout(4000),
+    });
+    return (await res.json()).result?.header?.hash ?? null;
+  } catch {
+    return null;
+  }
+}
 
 const time = () => new Date().toISOString().slice(11, 19);
 
@@ -39,12 +55,13 @@ async function tick() {
     // unreachable worker is just a failed check
   }
 
-  const verdict = checkDelivery(body, Date.now(), lastSequence, maxStalenessMs);
+  const reference = Number.isInteger(body?.height) ? await referenceHash(body.height) : null;
+  const verdict = checkDelivery(body, reference, Date.now(), lastHeight, maxStalenessMs);
   if (!verdict.ok) {
-    console.log(`${time()}  ✗ not attesting: ${body ? verdict.reason : "worker unreachable"}`);
+    console.log(`${time()}  ✗ not attesting: ${body ? verdict.reason : "service unreachable"}`);
     return;
   }
-  lastSequence = body.sequence;
+  lastHeight = body.height;
 
   try {
     const outcome = await account.callFunctionRaw({

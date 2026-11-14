@@ -189,6 +189,22 @@ check("token solvency: contract holds at least what its open wNEAR streams still
   return BigInt(JSON.parse(Buffer.from(result.result).toString())) >= owed;
 });
 
+check("verified-time accounting (stream 12): a 45s outage was NOT paid; payout = verified time only", async () => {
+  const created = await tx("47hURAZRoq6o7fZjizzpdkN1dZKXZeVpyQtnaGmVa2J5", SENDER);
+  const cancelled = await tx("4STyBK5mQVZCXgMCr84k47zyCbUdGGSWJDJvS6jZ41Jv", SENDER);
+  const s = await view("get_stream", { stream_id: 12 });
+  const wallNanos = BigInt(s.settledAt) - BigInt(s.startTime);
+  const verified = BigInt(s.verifiedNanos);
+  const expectedPaid = (BigInt(s.totalAmount) * verified) / (BigInt(s.durationSeconds) * 1_000_000_000n);
+  return (
+    succeeded(created) &&
+    succeeded(cancelled) &&
+    s.closed &&
+    verified + 45_000_000_000n < wallNanos && // at least the outage was excluded
+    BigInt(s.withdrawn) === expectedPaid
+  );
+});
+
 check("ungated live stream 6 accrues in real time (two reads 4s apart)", async () => {
   const a = BigInt((await view("get_stream", { stream_id: 6 })).withdrawable);
   await sleep(4000);

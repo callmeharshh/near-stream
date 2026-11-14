@@ -1,6 +1,32 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { accruedAmount, effectiveAttestedAt } from "./stream-math.ts";
+import { accruedAmount, effectiveAttestedAt, creditForAttestation, verifiedAccrued } from "./stream-math.ts";
+
+test("verified time: nothing is paid before the first quorum attestation", () => {
+  // stream starts at 0; the first quorum attestation lands at 5s: the 0..5s stretch is unverified
+  assert.equal(creditForAttestation(0n, 5n * 1_000_000_000n, 0n, 20n), 0n);
+});
+
+test("verified time: consecutive attestations within the heartbeat are paid", () => {
+  const S = 1_000_000_000n;
+  assert.equal(creditForAttestation(5n * S, 10n * S, 0n, 20n), 5n * S);
+});
+
+test("verified time: an outage longer than the heartbeat is never paid, even after recovery", () => {
+  const S = 1_000_000_000n;
+  // attest at 10s, outage, next attest at 70s with a 20s heartbeat: the 60s gap earns nothing
+  assert.equal(creditForAttestation(10n * S, 70n * S, 0n, 20n), 0n);
+  // the reviewer's case: 30s verified then a 60s outage then recovery must stay at 30s worth
+  let verified = 0n;
+  const attests = [5n, 10n, 15n, 20n, 25n, 30n, 35n, 95n, 100n].map((t) => t * S); // outage 35s..95s
+  for (let i = 1; i < attests.length; i++) verified += creditForAttestation(attests[i - 1], attests[i], 0n, 20n);
+  assert.equal(verified, 35n * S); // 5..35 (30s) + 95..100 (5s); the 60s outage is excluded
+  assert.equal(verifiedAccrued(1000n, verified, 100n), 350n);
+});
+
+test("verified time: payout caps at the stream total", () => {
+  assert.equal(verifiedAccrued(1000n, 500n * 1_000_000_000n, 100n), 1000n);
+});
 
 test("k-of-n: effective attestation is the k-th most recent", () => {
   assert.equal(effectiveAttestedAt([10n, 50n, 30n], 1), 50n);

@@ -27,6 +27,7 @@ export type RawStream = {
   refundOwed?: string;
   heartbeatSeconds?: string | null;
   lastAttestedAt?: string;
+  verifiedNanos?: string | null; // verified-time accounting (newer gated streams)
 };
 
 let selector: WalletSelector | null = null;

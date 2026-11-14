@@ -1,5 +1,5 @@
 import { NearBindgen, near, call, view, UnorderedMap, NearPromise } from "near-sdk-js";
-import { accruedAmount, effectiveAttestedAt, type Heartbeat } from "./stream-math";
+import { accruedAmount, effectiveAttestedAt, creditForAttestation, verifiedAccrued, type Heartbeat } from "./stream-math";
 
 const FT_TRANSFER_GAS = 15_000_000_000_000n;
 const PAYOUT_CALLBACK_GAS = 20_000_000_000_000n;
@@ -30,6 +30,10 @@ export class Stream {
   settledAt: bigint | null;
   // Token refunds to the sender whose ft_transfer failed; reclaimable via claim_refund.
   refundOwed: bigint;
+  // Verified-time accounting for gated streams: nanoseconds of delivery covered by
+  // consecutive quorum attestations (see creditForAttestation). null = ungated, or a
+  // stream created before this field existed (those keep the legacy clock-based model).
+  verifiedNanos: bigint | null;
 
   constructor(args: {
     id: number;
@@ -60,6 +64,7 @@ export class Stream {
     this.token = args.token;
     this.settledAt = null;
     this.refundOwed = 0n;
+    this.verifiedNanos = args.verifiers ? 0n : null;
   }
 }
 
@@ -85,13 +90,23 @@ function heartbeatOf(stream: Stream): Heartbeat {
   return { lastAttestedAt: stream.lastAttestedAt, heartbeatSeconds: stream.heartbeatSeconds };
 }
 
-// Total owed to the receiver so far. A cancelled stream never accrues past settledAt.
-// Closed streams without settledAt (fully withdrawn, or cancelled before settledAt
-// existed) are final: nothing more accrues.
+function usesVerifiedTime(stream: Stream): boolean {
+  return heartbeatOf(stream) !== null && stream.verifiedNanos !== null && stream.verifiedNanos !== undefined;
+}
+
+// Total owed to the receiver as of `now`.
+function accruedAt(stream: Stream, now: bigint): bigint {
+  if (usesVerifiedTime(stream)) {
+    return verifiedAccrued(stream.totalAmount, stream.verifiedNanos!, stream.durationSeconds);
+  }
+  return accruedAmount(stream, now, heartbeatOf(stream));
+}
+
+// A cancelled stream never accrues past settledAt. Closed streams without settledAt
+// (fully withdrawn, or cancelled before settledAt existed) are final.
 function accruedNow(stream: Stream): bigint {
   if (stream.closed && !stream.settledAt) return stream.withdrawn;
-  const now = stream.settledAt ?? near.blockTimestamp();
-  return accruedAmount(stream, now, heartbeatOf(stream));
+  return accruedAt(stream, stream.settledAt ?? near.blockTimestamp());
 }
 
 @NearBindgen({})
@@ -138,6 +153,7 @@ class StreamContract {
       throw new Error("Stream already closed");
     }
     const now = near.blockTimestamp();
+    const previous = stream.lastAttestedAt;
     if (stream.verifiers && stream.attestations && stream.threshold) {
       stream.attestations[caller] = now;
       stream.lastAttestedAt = effectiveAttestedAt(
@@ -146,6 +162,9 @@ class StreamContract {
       );
     } else {
       stream.lastAttestedAt = now; // legacy 1-of-1 stream
+    }
+    if (usesVerifiedTime(stream)) {
+      stream.verifiedNanos! += creditForAttestation(previous, stream.lastAttestedAt, stream.startTime, stream.heartbeatSeconds!);
     }
     this.streams.set(String(stream_id), stream);
     near.log(`Stream ${stream_id}: attested by ${caller}`);
@@ -185,7 +204,7 @@ class StreamContract {
       throw new Error("Stream already closed");
     }
     const now = near.blockTimestamp();
-    const accrued = accruedAmount(stream, now, heartbeatOf(stream));
+    const accrued = accruedAt(stream, now);
     const owedToReceiver = accrued - stream.withdrawn;
     const refundToSender = stream.totalAmount - accrued;
     stream.withdrawn = accrued;

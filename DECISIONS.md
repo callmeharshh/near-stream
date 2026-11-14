@@ -154,7 +154,19 @@ read any streams. Lava's testnet endpoint returns `410 discontinued`. Switched t
 frontend and agent to `https://test.rpc.fastnear.com` (CORS `*`, verified working);
 the wallet selector already defaults to FastNEAR for testnet.
 
-## The heartbeat freeze is a cap, not a true pause
+## Superseded: verified-time accounting replaced the "cap" model
+
+An external review pointed out that the cap model (below) contradicted the core claim:
+one attestation after an outage made the whole outage payable again (300 → 900 units),
+and payment accrued during the first heartbeat window before anyone had attested. Both
+were real. Newer gated streams now pay only for time between two consecutive quorum
+attestations no more than one heartbeat apart (`creditForAttestation` in
+`contract/src/stream-math.ts`, mirrored in `contract-rs/`). Outages and pre-quorum time
+are never payable. Proven on testnet (stream 12: 166s wall-clock, 64.1s verified, paid
+exactly 64.1s worth) and checked by the verifier. Streams 0–11 keep the old model,
+since changing recorded streams retroactively would rewrite history.
+
+## (Old) The heartbeat freeze is a cap, not a true pause
 
 When a verifier-gated stream's heartbeat lapses, `accruedAmount` clamps the
 *effective* clock to `lastAttestedAt + heartbeatSeconds` instead of continuing to

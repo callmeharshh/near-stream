@@ -3,7 +3,7 @@
 Every row below is a real NEAR **testnet** transaction or on-chain read.
 `npm run verify` (`scripts/verify-evidence.mjs`) re-checks all of it read-only and
 checks properties, not just existence (e.g. which key signed a tx, exact payout
-amounts, that a frozen stream stays frozen). Last run: **26/26 PASS**.
+amounts, that a frozen stream stays frozen). Last run: **27/27 PASS**.
 
 Contract: [`near-stream-contract-1794591135.testnet`](https://explorer.testnet.near.org/accounts/near-stream-contract-1794591135.testnet)
 
@@ -17,6 +17,18 @@ Contract: [`near-stream-contract-1794591135.testnet`](https://explorer.testnet.n
 | `create_stream` with a verifier + 8s heartbeat | [`3KKJjtGZor...`](https://explorer.testnet.near.org/transactions/3KKJjtGZorNT2TRRDuGJAcy8X5NmfuWz7StahZF69C8H) |
 | `attest` by the verifier (a non-verifier was rejected) | [`BpPdVRPkMw...`](https://explorer.testnet.near.org/transactions/BpPdVRPkMw6CYE5fti6EkJS2PRt5ijtFZCdAwEp46TFy) |
 | `cancel` on a **stalled** stream: receiver got only the frozen 5s amount (0.025 of 0.5 NEAR), sender got 0.475 back, although ~20s of real time had passed with no attestation | [`5wUiwTkQ3e...`](https://explorer.testnet.near.org/transactions/5wUiwTkQ3estn7PpdQbH6aXUu5xTQLjiFogjPJ2X5L98) |
+
+## Verified-time accounting (stream 12, created after the upgrade)
+
+| What | Evidence |
+|---|---|
+| Stream created (1 NEAR over 1000s, 15s heartbeat); before any attestation: **0 payable** after 18s | [`47hURAZRoq...`](https://explorer.testnet.near.org/transactions/47hURAZRoq6o7fZjizzpdkN1dZKXZeVpyQtnaGmVa2J5) |
+| Watchdog verified live NEAR blocks against a reference RPC and attested | e.g. [`42xppiabtT...`](https://explorer.testnet.near.org/transactions/42xppiabtTQ3DxLtYaQ9WjtEBfEyHFdYBoe5YPDSJwwW) |
+| 45s outage (stale data, HTTP 200) → rejected as stale; after recovery payout continued from where it stopped | watchdog log + `get_stream` reads |
+| Forged block hash → rejected (`doesn't match the reference`) | watchdog log |
+| Settled: 166s wall-clock, **64.1s verified**, provider paid **0.0641 NEAR** (= exactly verified time × rate) | [`4STyBK5mQV...`](https://explorer.testnet.near.org/transactions/4STyBK5mQVZCXgMCr84k47zyCbUdGGSWJDJvS6jZ41Jv) |
+
+Streams 0–11 below predate this upgrade and use the earlier clock-based model.
 
 ## Watchdog agent (attest-only key)
 

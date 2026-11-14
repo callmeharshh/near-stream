@@ -14,7 +14,7 @@ import {
   type RawStream,
   type TokenMeta,
 } from "./near";
-import { accruedAmount, type Heartbeat } from "./stream-math";
+import { accruedAmount, verifiedAccrued, type Heartbeat } from "./stream-math";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 
@@ -73,6 +73,11 @@ function isStalled(stream: RawStream): boolean {
 function withdrawableNow(stream: RawStream): bigint {
   // Closed without a settle time = final (fully withdrawn, or cancelled before settledAt existed).
   if (stream.closed && !stream.settledAt) return 0n;
+  if (heartbeatOf(stream) && stream.verifiedNanos != null) {
+    // verified-time stream: only attested time is payable, exactly as the contract computes it
+    const owed = verifiedAccrued(BigInt(stream.totalAmount), BigInt(stream.verifiedNanos), BigInt(stream.durationSeconds));
+    return owed > BigInt(stream.withdrawn) ? owed - BigInt(stream.withdrawn) : 0n;
+  }
   // Uses the browser clock as a stand-in for the chain's block timestamp so the UI can
   // tick between RPC reads; the contract always recomputes from the real block time on
   // withdraw/cancel, so this is a display estimate only, never the source of truth.
@@ -101,7 +106,9 @@ function heartbeatReadout(stream: RawStream, stalled: boolean): string {
   const sinceAttest = Math.max(0, Math.floor((Date.now() - Number(BigInt(stream.lastAttestedAt!) / 1_000_000n)) / 1000));
   const window = Number(stream.heartbeatSeconds);
   const detail = stalled
-    ? `<strong>Payout frozen</strong> — no attestation for ${sinceAttest}s (window ${window}s). The sender can cancel at the frozen amount; the next attestation releases the real elapsed amount.`
+    ? stream.verifiedNanos != null
+      ? `<strong>Payout frozen</strong> — no attestation for ${sinceAttest}s (window ${window}s). This unverified time will never be paid; payout resumes from the next attestation.`
+      : `<strong>Payout frozen</strong> — no attestation for ${sinceAttest}s (window ${window}s). The sender can cancel at the frozen amount; the next attestation releases the real elapsed amount.`
     : `Last attestation ${sinceAttest}s ago · payout freezes in <strong>${window - sinceAttest}s</strong> unless ${
         verifiersOf(stream).length > 1 ? `${stream.threshold} of ${verifiersOf(stream).length} verifiers attest` : "the verifier attests"
       } again.`;

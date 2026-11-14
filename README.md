@@ -8,8 +8,8 @@ Autonomous Business, AI Security & Defense · Runs on NEAR **testnet**.
 | | |
 |---|---|
 | Live app (no install) | https://callmeharshh.github.io/near-stream/ |
-| Verify every on-chain claim (read-only) | `npm run verify` → **26/26 PASS** ([what it checks](./EVIDENCE.md)) |
-| Tests | `npm run install:all && npm test` → **22 passing** |
+| Verify every on-chain claim (read-only) | `npm run verify` → **27/27 PASS** ([what it checks](./EVIDENCE.md)) |
+| Tests | `npm run install:all && npm test` → **29 passing** (+5 Rust: `cd contract-rs && cargo test`) |
 | All transactions | [`EVIDENCE.md`](./EVIDENCE.md) |
 | Design decisions & gotchas | [`DECISIONS.md`](./DECISIONS.md) |
 
@@ -25,12 +25,16 @@ the moment the work stops, and with agents running 24/7, nobody is watching.
    to a receiver over a set duration.
 2. **Money accrues per second.** The receiver can withdraw what has accrued at any
    time.
-3. **Watchdog agents verify delivery.** Every few seconds a watchdog checks the
-   paid service (is new, valid work being produced?) and, if so, calls `attest`
-   on-chain. A stream can require **k of n** independent watchdogs (e.g. 2 of 3).
-4. **No attestation → payout freezes.** If fewer than k watchdogs attest within
-   the heartbeat window, the contract stops counting time. This catches the
-   server going down *and* the server staying up but quietly producing nothing.
+3. **Watchdog agents verify delivery.** In the demo the paid service is a **NEAR RPC
+   data provider**. Every few seconds the watchdog fetches its latest block and calls
+   `attest` on-chain only if the data is **correct** (block hash matches an
+   independent reference RPC), **fresh** (recent, not future-dated) and **advancing**.
+   A stream can require **k of n** independent watchdogs (e.g. 2 of 3).
+4. **Only verified time is paid.** The contract pays for a stretch of time only if it
+   lies between two consecutive quorum attestations no more than one heartbeat apart.
+   Time before the first attestation and outages are **never** paid, even after the
+   service recovers. This catches the service going down, serving stale data while
+   still answering HTTP 200, and serving forged data.
 5. **A guardian agent pulls the money back.** If a stream stays frozen past a
    grace period, the payer's guardian cancels it: the receiver keeps exactly what
    was verified, the rest is refunded.
@@ -56,8 +60,9 @@ All on testnet, re-checked by `npm run verify`. Full transaction list in
 | Feature | Proof |
 |---|---|
 | Per-second streams: create, withdraw, cancel | balances reconciled across contract, sender, receiver |
-| Freeze when attestations stop | stalled stream paid out exactly the frozen amount (0.025 of 0.5 NEAR) |
-| Autonomous watchdog | attests on its own; stops when the service stalls; resumes when it recovers |
+| **Only verified time is paid** | stream 12: 166s of wall-clock time, 64.1s verified → provider paid 0.0641 NEAR; a 45s outage and the pre-attestation start were excluded (the old clock model would have paid ~0.166) |
+| Real service, checked for correctness | watchdog verified live NEAR blocks against a reference RPC; rejected stale data, a forged block hash, and future timestamps |
+| Autonomous watchdog | attests on its own; stops when the service fails; resumes when it recovers |
 | k-of-n watchdogs | 2-of-3 stream kept paying with one watchdog down, froze with two down |
 | Guardian auto-cancel | cancelled a frozen stream with no human; refund returned to payer |
 | Scoped agent keys | both agents' keys were rejected by the protocol when trying to transfer funds or call other methods |
@@ -81,22 +86,30 @@ meta-transactions.
 ### Why not the Agent API?
 
 The [Agent API](https://docs.agentsonintents.com/integration/agent-api/overview)
-gives an agent a policy-bound wallet: budgets, allowed destinations, schedules, a
-timelock, owner approval and an emergency freeze. In its documented policy we
-found no rule for *"keep paying only while independent verifiers confirm the work
-is still being delivered."* That conditional, per-second payment is what this
-contract adds. The agents here only need to sign one method each, which a native
-function-call key does without extra infrastructure. The Agent API is also a
-mainnet-only beta; this project runs on testnet. It would fit well on the payer's
-side (funding streams from an Agent API wallet), but that is **not built**.
+gives *one party's* agent a policy-bound wallet: budgets, allowed destinations,
+schedules, a timelock, owner approval and an emergency freeze. In its documented
+policy we found no rule that conditions payment on third-party verification. What
+this contract adds:
+
+1. **Payment conditioned on delivery evidence:** money accrues only for time covered
+   by a quorum of independent attestations; unverified time is never payable.
+2. **Escrow that protects both sides:** the provider can withdraw verified earnings
+   at any time and the payer can't claw them back; the payer is guaranteed every
+   unverified coin back. A spending policy on the payer's own wallet can't give the
+   provider that guarantee.
+3. **No extra custody:** each agent needs to sign exactly one method, which a native
+   function-call key does on its own.
+
+The Agent API is also a mainnet-only beta; this project runs on testnet. It would
+fit on the payer's side (funding streams from an Agent API wallet); that is **not built**.
 
 ## Try it
 
 **No NEAR account needed:**
 ```bash
 npm run install:all
-npm test          # 22 unit tests (accrual, freeze, k-of-n, agent rules)
-npm run verify    # re-checks 26 on-chain claims, read-only
+npm test          # 29 unit tests (verified-time accounting, k-of-n, delivery check, agents)
+npm run verify    # re-checks 27 on-chain claims, read-only
 ```
 Or open the [live app](https://callmeharshh.github.io/near-stream/): it reads the
 real contract; stream #6 keeps ticking until Nov 19.
@@ -114,10 +127,11 @@ Rosetta 2; see `DECISIONS.md`).
 ## Architecture
 
 ```
-contract/   smart contract (TypeScript, near-sdk-js); money math in stream-math.ts
+contract/   smart contract (TypeScript, near-sdk-js; live on testnet); money math in stream-math.ts
+contract-rs/ Rust port for mainnet (native-NEAR streams; 148 KB vs 556 KB of storage)
 agent/      watchdog.mjs  verifies a service, attests (attest-only key)
             guardian.mjs  cancels frozen streams (cancel-only key)
-            worker.mjs    demo "paid service" you can stall or kill
+            worker.mjs    the paid service: serves live NEAR block data; POST /stall, /tamper, /resume
             check.mjs     the delivery check + guardian rule (no LLM; unit-tested)
 frontend/   web app (Vite + TypeScript), reads the contract directly; no backend
 scripts/    verify-evidence.mjs (read-only verifier), mainnet-setup.mjs (deploy script)
@@ -125,15 +139,21 @@ scripts/    verify-evidence.mjs (read-only verifier), mainnet-setup.mjs (deploy 
 
 ## Honest limitations
 
-- **Testnet only.** Mainnet needs ~7.5 NEAR (~5.7 of it storage deposit for the
-  contract) that we didn't have.
-  `scripts/mainnet-setup.mjs` deploys everything in one command and was dry-run on
-  testnet (its transactions are in `evidence/` and verified).
+- **Testnet only (so far).** The JS contract would need ~5.6 NEAR of storage on
+  mainnet; the Rust port (`contract-rs/`) needs ~1.48. `scripts/mainnet-setup.mjs`
+  deploys the Rust build plus accounts and agent keys in one command; the full flow
+  (deploy, both agents, auto-cancel) was rehearsed on testnet with exactly 1.85 NEAR.
+  The Rust port covers native-NEAR streams only; token streams are in the JS contract.
 - **Token streams were proven with wNEAR, not USDC.** We couldn't mint testnet
   USDC; the code is token-agnostic NEP-141, so USDC uses the same calls.
-- **The watchdog only sees what's observable.** It checks that work is fresh,
-  well-formed and progressing; a provider faking that output would fool it. Real
-  use would plug in a domain-specific check.
+- **What the watchdog can verify is domain-specific.** For the demo's RPC service it
+  checks correctness against a reference RPC. The reference is a separate FastNEAR
+  endpoint, not a different company; real use should pick an independent provider.
+- **Detection latency:** a failure is caught at the next check, so up to about one
+  check interval (5s in the demo) can be paid after a failure starts.
+- **Streams 0–11 on testnet use the earlier clock-based model** (an outage was paid
+  after recovery). Verified-time accounting applies to streams created after the
+  upgrade (stream 12 onward); the contract keeps old streams' recorded behavior.
 - **Gas:** each `attest` costs ~0.0013 NEAR (JavaScript contracts are gas-heavy).
   The demo attests every 5s for visibility; real use would attest every few minutes.
 - **Single-machine demo:** worker, watchdogs and guardian ran on one computer. In

@@ -16,6 +16,14 @@ export type Heartbeat = {
   heartbeatSeconds: bigint;
 } | null;
 
+// Newer gated streams pay only verified time (stretches between consecutive attestations
+// within the heartbeat); the contract tracks it as `verifiedNanos`.
+export function verifiedAccrued(totalAmount: bigint, verifiedNanos: bigint, durationSeconds: bigint): bigint {
+  const durationNanos = durationSeconds * NANOS_PER_SECOND;
+  if (verifiedNanos >= durationNanos) return totalAmount;
+  return (totalAmount * verifiedNanos) / durationNanos;
+}
+
 export function accruedAmount(stream: StreamTiming, nowNanos: bigint, heartbeat: Heartbeat = null): bigint {
   let effectiveNow = nowNanos;
   if (heartbeat) {

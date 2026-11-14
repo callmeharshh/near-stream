@@ -27,6 +27,8 @@ pub struct Stream {
     pub last_attested_at: U64,
     pub attestations: Option<Vec<U64>>, // parallel to `verifiers`
     pub settled_at: Option<U64>,
+    // Nanoseconds of delivery covered by consecutive quorum attestations (gated streams).
+    pub verified_nanos: Option<U64>,
 }
 
 #[near(serializers = [json])]
@@ -45,7 +47,26 @@ pub fn effective_attested_at(times: &[u64], threshold: u32) -> u64 {
     sorted[(threshold - 1) as usize]
 }
 
-/// Linear accrual, with time capped at the heartbeat deadline when gated.
+/// Verified-time accounting: the stretch between two consecutive quorum attestations
+/// is paid only if they are at most one heartbeat apart. Outages and time before the
+/// first quorum attestation (prev <= start) are never paid.
+pub fn credit_for_attestation(prev: u64, next: u64, start: u64, heartbeat_s: u64) -> u64 {
+    if prev <= start || next <= prev || next - prev > heartbeat_s * NANOS_PER_SECOND {
+        return 0;
+    }
+    next - prev
+}
+
+pub fn verified_accrued(total: u128, verified_nanos: u64, duration_s: u64) -> u128 {
+    let duration = duration_s as u128 * NANOS_PER_SECOND as u128;
+    let v = verified_nanos as u128;
+    if v >= duration {
+        return total;
+    }
+    total / duration * v + total % duration * v / duration
+}
+
+/// Linear accrual for ungated streams.
 pub fn accrued_amount(total: u128, start: u64, duration_s: u64, now: u64, heartbeat: Option<(u64, u64)>) -> u128 {
     let mut effective_now = now;
     if let Some((last_attested_at, heartbeat_s)) = heartbeat {
@@ -70,14 +91,20 @@ fn heartbeat_of(s: &Stream) -> Option<(u64, u64)> {
     }
 }
 
+fn accrued_at(s: &Stream, now: u64) -> u128 {
+    match (heartbeat_of(s), s.verified_nanos) {
+        (Some(_), Some(v)) => verified_accrued(s.total_amount.0, v.0, s.duration_seconds.0),
+        _ => accrued_amount(s.total_amount.0, s.start_time.0, s.duration_seconds.0, now, heartbeat_of(s)),
+    }
+}
+
 // Total owed to the receiver so far; a cancelled stream never accrues past settledAt,
 // and a closed stream without it (fully withdrawn) is final.
 fn accrued_now(s: &Stream) -> u128 {
     if s.closed && s.settled_at.is_none() {
         return s.withdrawn.0;
     }
-    let now = s.settled_at.map(|t| t.0).unwrap_or_else(env::block_timestamp);
-    accrued_amount(s.total_amount.0, s.start_time.0, s.duration_seconds.0, now, heartbeat_of(s))
+    accrued_at(s, s.settled_at.map(|t| t.0).unwrap_or_else(env::block_timestamp))
 }
 
 #[near(contract_state)]
@@ -133,6 +160,7 @@ impl Contract {
         let id = self.next_id;
         self.next_id += 1;
         let attestations = verifiers.as_ref().map(|v| vec![U64(now); v.len()]);
+        let verified_nanos = verifiers.as_ref().map(|_| U64(0));
         self.streams.insert(
             id,
             Stream {
@@ -150,6 +178,7 @@ impl Contract {
                 last_attested_at: U64(now),
                 attestations,
                 settled_at: None,
+                verified_nanos,
             },
         );
         env::log_str(&format!("Stream {id} created: {sender} -> {receiver_id}, {total} yoctoNEAR over {duration_seconds}s"));
@@ -171,7 +200,11 @@ impl Contract {
         let atts = s.attestations.get_or_insert_with(Vec::new);
         atts[idx] = U64(env::block_timestamp());
         let times: Vec<u64> = atts.iter().map(|t| t.0).collect();
+        let previous = s.last_attested_at.0;
         s.last_attested_at = U64(effective_attested_at(&times, threshold));
+        if let (Some(v), Some(h)) = (s.verified_nanos, s.heartbeat_seconds) {
+            s.verified_nanos = Some(U64(v.0 + credit_for_attestation(previous, s.last_attested_at.0, s.start_time.0, h.0)));
+        }
         env::log_str(&format!("Stream {stream_id}: attested by {caller}"));
     }
 
@@ -194,7 +227,7 @@ impl Contract {
         require!(env::predecessor_account_id() == s.sender, "Only the sender can cancel this stream");
         require!(!s.closed, "Stream already closed");
         let now = env::block_timestamp();
-        let accrued = accrued_amount(s.total_amount.0, s.start_time.0, s.duration_seconds.0, now, heartbeat_of(s));
+        let accrued = accrued_at(s, now);
         let owed = accrued - s.withdrawn.0;
         let refund = s.total_amount.0 - accrued;
         s.withdrawn = U128(accrued);
@@ -248,6 +281,18 @@ mod tests {
         assert_eq!(frozen, 300);
         assert_eq!(accrued_amount(1000, 0, 100, 1000 * S, Some((0, 30))), 300);
         assert_eq!(accrued_amount(1000, 0, 100, 90 * S, Some((90 * S, 30))), 900);
+    }
+
+    #[test]
+    fn verified_time_excludes_outage_and_pre_quorum_time() {
+        // first quorum attestation at 5s: 0..5s is never paid
+        assert_eq!(credit_for_attestation(0, 5 * S, 0, 20), 0);
+        // 30s verified, 60s outage, recovery: only verified stretches count
+        let attests = [5u64, 10, 15, 20, 25, 30, 35, 95, 100];
+        let verified: u64 = attests.windows(2).map(|w| credit_for_attestation(w[0] * S, w[1] * S, 0, 20)).sum();
+        assert_eq!(verified, 35 * S);
+        assert_eq!(verified_accrued(1000, verified, 100), 350);
+        assert_eq!(verified_accrued(1000, 500 * S, 100), 1000);
     }
 
     #[test]

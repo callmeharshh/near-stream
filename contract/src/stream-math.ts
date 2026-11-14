@@ -24,6 +24,31 @@ export function effectiveAttestedAt(attestationTimes: bigint[], threshold: numbe
   return sorted[threshold - 1];
 }
 
+// Verified-time accounting (gated streams created after this change): a stretch of
+// time is paid only if it lies between two consecutive quorum attestations no more
+// than one heartbeat apart. Outage gaps (longer than the heartbeat) and the time
+// before the first quorum attestation are never paid, even after delivery resumes.
+// `prevEffective <= startTime` means no quorum had attested yet.
+export function creditForAttestation(
+  prevEffective: bigint,
+  nextEffective: bigint,
+  startTime: bigint,
+  heartbeatSeconds: bigint,
+): bigint {
+  if (prevEffective <= startTime) return 0n;
+  const gap = nextEffective - prevEffective;
+  if (gap <= 0n || gap > heartbeatSeconds * NANOS_PER_SECOND) return 0n;
+  return gap;
+}
+
+export function verifiedAccrued(totalAmount: bigint, verifiedNanos: bigint, durationSeconds: bigint): bigint {
+  const durationNanos = durationSeconds * NANOS_PER_SECOND;
+  if (verifiedNanos >= durationNanos) return totalAmount;
+  return (totalAmount * verifiedNanos) / durationNanos;
+}
+
+// Legacy model (streams created before verified-time accounting, and ungated streams):
+// accrual follows the clock, capped at the heartbeat deadline when gated.
 export function accruedAmount(stream: StreamTiming, now: bigint, heartbeat: Heartbeat = null): bigint {
   let effectiveNow = now;
   if (heartbeat) {

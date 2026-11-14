@@ -1,42 +1,51 @@
-// Demo "paid service": stands in for an AI agent / API being paid per second.
-// It produces a fresh unit of work every 2s. Two ways to break it for the demo:
-//   - kill the process (outage)
-//   - POST /stall (server still answers 200, but work stops being produced —
-//     the failure a plain uptime check misses; the watchdog's freshness check catches it)
+// The paid service: a NEAR RPC data provider. It serves the latest finalized block
+// (height, hash, timestamp) from its upstream RPC. The payer streams money to it only
+// while the watchdog can verify that data is correct and fresh.
+//
+// Ways to break it for the demo (all still answer HTTP 200):
+//   POST /stall   keeps serving the last block: stale data, height stops advancing
+//   POST /tamper  serves the real height with a forged block hash: wrong data
+//   POST /resume  back to honest, live data
+// Or kill the process for a plain outage.
 import { createServer } from "node:http";
-import { createHash } from "node:crypto";
 
 const PORT = Number(process.env.WORKER_PORT ?? 8787);
-let stalled = false;
-let sequence = 0;
+const UPSTREAM = process.env.UPSTREAM_RPC ?? "https://test.rpc.fastnear.com";
+let mode = "live"; // live | stalled | tampered
 let latest = null;
 
-function produceWork() {
-  if (stalled) return;
-  sequence += 1;
-  const producedAt = new Date().toISOString();
-  const output = createHash("sha256").update(`${sequence}:${producedAt}`).digest("hex");
-  latest = { sequence, producedAt, output };
+async function refresh() {
+  if (mode === "stalled") return;
+  try {
+    const res = await fetch(UPSTREAM, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "block", params: { finality: "final" } }),
+      signal: AbortSignal.timeout(4000),
+    });
+    const header = (await res.json()).result.header;
+    latest = { height: header.height, hash: header.hash, timestampNanos: header.timestamp_nanosec };
+  } catch {
+    // keep the previous block; the watchdog will see it go stale
+  }
 }
-produceWork();
-setInterval(produceWork, 2000);
+await refresh();
+setInterval(refresh, 2000);
 
 createServer((req, res) => {
   const send = (status, body) => {
     res.writeHead(status, { "content-type": "application/json", "access-control-allow-origin": "*" });
     res.end(JSON.stringify(body));
   };
-  if (req.method === "GET" && req.url === "/work") return send(200, latest);
-  if (req.method === "POST" && req.url === "/stall") {
-    stalled = true;
-    console.log("worker: STALLED (still answering 200, but no new work)");
-    return send(200, { stalled });
+  if (req.method === "GET" && req.url === "/work") {
+    if (!latest) return send(503, { error: "no data yet" });
+    // forged hash: same length/format as a real one, but not the real block
+    return send(200, mode === "tampered" ? { ...latest, hash: "1".repeat(latest.hash.length) } : latest);
   }
-  if (req.method === "POST" && req.url === "/resume") {
-    stalled = false;
-    produceWork();
-    console.log("worker: resumed");
-    return send(200, { stalled });
+  if (req.method === "POST" && ["/stall", "/tamper", "/resume"].includes(req.url)) {
+    mode = { "/stall": "stalled", "/tamper": "tampered", "/resume": "live" }[req.url];
+    console.log(`service: now ${mode.toUpperCase()} (still answering HTTP 200)`);
+    return send(200, { mode });
   }
   send(404, { error: "not found" });
-}).listen(PORT, () => console.log(`worker: producing work on http://localhost:${PORT}/work`));
+}).listen(PORT, () => console.log(`service: serving live NEAR block data from ${UPSTREAM} on http://localhost:${PORT}/work`));

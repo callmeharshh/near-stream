@@ -51,28 +51,42 @@ test("guardian: never touches streams it isn't the sender of, closed streams, or
 });
 
 const now = Date.parse("2026-11-14T12:00:10.000Z");
-const good = { sequence: 5, producedAt: "2026-11-14T12:00:08.000Z", output: "a".repeat(64) };
+const nanosFromMs = (ms) => (BigInt(ms) * 1_000_000n).toString();
+const HASH = "4DTqsiGjP4KyXhyvQWmKLLs3vG9kqdbWMv9EsMYQY2Kr";
+const good = { height: 1000, hash: HASH, timestampNanos: nanosFromMs(now - 3000) };
+const check = (body, ref = HASH, last = 999) => checkDelivery(body, ref, now, last, 15_000);
 
-test("attests fresh, well-formed, progressing work", () => {
-  assert.equal(checkDelivery(good, now, 4, 10_000).ok, true);
-  assert.equal(checkDelivery(good, now, null, 10_000).ok, true);
+test("attests real, fresh, progressing data that matches the reference", () => {
+  assert.equal(check(good).ok, true);
+  assert.equal(check(good, HASH, null).ok, true);
 });
 
-test("refuses when the worker is unreachable or returns nothing", () => {
-  assert.equal(checkDelivery(null, now, null, 10_000).ok, false);
+test("refuses when the service is unreachable or returns nothing", () => {
+  assert.equal(check(null).ok, false);
 });
 
-test("refuses stale work even if the server answers (the /stall case)", () => {
-  const stale = { ...good, producedAt: "2026-11-14T11:59:50.000Z" };
-  assert.match(checkDelivery(stale, now, 4, 10_000).reason, /stale/);
+test("refuses stale data even though the service answers (the /stall case)", () => {
+  assert.match(check({ ...good, timestampNanos: nanosFromMs(now - 60_000) }).reason, /stale/);
 });
 
-test("refuses when no progress was made since the last attestation", () => {
-  assert.match(checkDelivery(good, now, 5, 10_000).reason, /no progress/);
+test("refuses a future-dated block (the 2099 timestamp case)", () => {
+  assert.match(check({ ...good, timestampNanos: nanosFromMs(Date.parse("2099-01-01T00:00:00Z")) }).reason, /future/);
+});
+
+test("refuses data that doesn't match the reference RPC (the /tamper case: wrong data)", () => {
+  assert.match(check({ ...good, hash: "1".repeat(44) }).reason, /doesn't match/);
+});
+
+test("refuses to attest when the reference can't be reached: unverified means unpaid", () => {
+  assert.match(check(good, null).reason, /reference/);
+});
+
+test("refuses when the height didn't advance since the last attestation", () => {
+  assert.match(check(good, HASH, 1000).reason, /no progress/);
 });
 
 test("refuses malformed payloads", () => {
-  assert.equal(checkDelivery({ ...good, output: "not-hex" }, now, null, 10_000).ok, false);
-  assert.equal(checkDelivery({ ...good, sequence: "5" }, now, null, 10_000).ok, false);
-  assert.equal(checkDelivery({ ...good, producedAt: "nope" }, now, null, 10_000).ok, false);
+  assert.equal(check({ ...good, height: "1000" }).ok, false);
+  assert.equal(check({ ...good, hash: "not-a-hash!" }).ok, false);
+  assert.equal(check({ ...good, timestampNanos: 123 }).ok, false);
 });

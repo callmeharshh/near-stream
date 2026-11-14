@@ -38,22 +38,22 @@ tick. It's gated: a verifier has to keep vouching for the work, or payout freeze
 See the countdown keep resetting."
 
 **0:35–0:50 — Agent one: the watchdog.** (terminal B)
-"The verifier isn't a person. It's this watchdog agent. Every 5 seconds it checks
-the service's actual output: fresh, valid, progressing. If it is, it attests on
-NEAR. Each line is a real transaction."
+"The service we're paying is a NEAR data provider. The verifier isn't a person: this
+watchdog agent checks every block it serves against an independent node. Correct,
+fresh and advancing? It attests on NEAR. Each line is a real transaction."
 
 **0:50–1:00 — Agent two: the guardian.** (terminal C)
 "On the payer's side, a guardian agent watches the stream, ready to pull the money
 back if it freezes."
 
 **1:00–1:40 — Break it.** (press Enter in terminal D)
-"Now the service stalls. The server's still up and still returns 200, so an uptime
-monitor would keep paying. But no new work." (B: `✗ stale work`)
+"Now the service stalls. It's still up and still returns 200, so an uptime monitor
+would keep paying. But its data is going stale." (B: `✗ stale data`)
 "The watchdog goes silent…" (card turns pink: **stalled — accrual frozen**)
 "…and the payment freezes on its own." (C: `frozen 5s… 10s…`, then `✓ cancelled`)
 "And there's the guardian. It cancelled the stream. The provider keeps exactly what
 was verified, and every unverified coin went back to the payer. Nobody pressed a
-button."
+button. And unverified time is never paid, even if the service comes back."
 
 **1:40–2:00 — Why NEAR.**
 "Why this is safe: each agent holds a NEAR key that can do exactly one thing. The

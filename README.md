@@ -17,6 +17,7 @@ services only while they're delivered, with an agent that cuts them off), and
 | **Verify every claim** (read-only, ~15s) | `node scripts/verify-evidence.mjs` → **21/21 PASS** |
 | **All tests** | `npm run install:all && npm test` → 20 passing (11 contract math, 9 agent rules) |
 | **Demo script** | [`DEMO.md`](./DEMO.md) |
+| **Mainnet** | Not deployed yet (needs ~7.5 NEAR of storage deposit). `scripts/mainnet-setup.mjs` deploys the whole system (contract, scoped watchdog + guardian keys, demo stream) in one command, and has been run end to end with `DRY_RUN=1` on testnet. |
 
 ### Where this fits
 

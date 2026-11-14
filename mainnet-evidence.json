@@ -1,0 +1,110 @@
+{
+  "network": "mainnet",
+  "accounts": {
+    "contract": "85401b220a3d58edb6f98a7ddbc48598ee373314ae17ae1399f7cf2462c45d98",
+    "sender": "a703412c004853847d86a05dac57fbe253ddf6c79c2e040bd24cbefdef1428f3",
+    "receiver": "edc572fff9aa8ffe911c8055e821c848ac7de5219b9a9010d5d3b9cfcaa83e52",
+    "verifier": "c3196c05b247f2fd332c2b9d525f5210196fe635a35f1da4d5c8991967004aa5"
+  },
+  "watchdogKey": "ed25519:GxiVpYr4RSG1GJUgFqCobcbhs4XhLgfD1NkS2MXeFvWo",
+  "guardianKey": "ed25519:BkWc4My2QjYteR58jZbK8uxZf91kXfXTFRVLfcAd9Wdo",
+  "steps": [
+    {
+      "at": "2026-11-14T18:42:48.175Z",
+      "step": "deploy contract",
+      "tx": "CY5LCufpyQKjc1eKCQfryi8H1k9nmWHodZrdFmVt8JX3"
+    },
+    {
+      "at": "2026-11-14T18:42:50.558Z",
+      "step": "fund sender with 0.16 NEAR",
+      "tx": "6e8XZD5znQzoZZxfbZwyNTeLTZs4juSWy3b1Ktc3SjwB"
+    },
+    {
+      "at": "2026-11-14T18:42:53.402Z",
+      "step": "fund verifier with 0.06 NEAR",
+      "tx": "FQTStXmPVvMbbHzpSgetTbTV8kttZK5F5GinYfbXnGVF"
+    },
+    {
+      "at": "2026-11-14T18:42:55.629Z",
+      "step": "fund receiver with 0.01 NEAR",
+      "tx": "FfwfcjqBDZ5SzoUdGxo2kunNxY8Hq7FtxdJJoGNUjfBh"
+    },
+    {
+      "at": "2026-11-14T18:42:58.047Z",
+      "step": "register attest-only watchdog key on verifier",
+      "tx": "2HgQVubX3tuzNPdsAsrDgo4JUGZ3nAQ6V61J71RYrpR9"
+    },
+    {
+      "at": "2026-11-14T18:42:59.844Z",
+      "step": "register cancel-only guardian key on sender",
+      "tx": "86sudXJP5dMGvW5LzEA9ooj6vgswS8HXL5b8PMai56GQ"
+    },
+    {
+      "at": "2026-11-14T18:43:02.011Z",
+      "step": "create_stream 0.05 NEAR / 1h, verifier-gated, 20s heartbeat",
+      "tx": "12DSoYg1fEkrscMH9uxMP7odPVwogwygqk9Y6jH6L1h3"
+    },
+    {
+      "step": "watchdog attest via attest-only key (verified block #224553373)",
+      "tx": "CnTZr75YgGw3frejgY89xQZRPxi5SBt46DX4CJAyzW41",
+      "signer": "verifier"
+    },
+    {
+      "step": "watchdog attest via attest-only key (verified block #224553383)",
+      "tx": "Bwj8onEwfp6Sypqim5fjeLY2fhNeRyDVdTraFZfA1oru",
+      "signer": "verifier"
+    },
+    {
+      "step": "watchdog attest via attest-only key (verified block #224553390)",
+      "tx": "Ea5dvF3J6aFyDSPHPDa3YAHz1N9FQaKJ3vCmfzChF2Fu",
+      "signer": "verifier"
+    },
+    {
+      "step": "watchdog attest via attest-only key (verified block #224553396)",
+      "tx": "AtPeJfzBhhhzgvAaD65t2E12ADd4k8DeHbFSYZNGMphy",
+      "signer": "verifier"
+    },
+    {
+      "step": "watchdog attest via attest-only key (verified block #224553406)",
+      "tx": "AbUQYJywoLmqGBC4PuL1hxM3V59CUwgzrsEKgscTccGz",
+      "signer": "verifier"
+    },
+    {
+      "step": "watchdog attest via attest-only key (verified block #224553417)",
+      "tx": "DbW2XFheCUKSMca2haRE63WocyVA4JFTWSMEBCeAwtyc",
+      "signer": "verifier"
+    },
+    {
+      "step": "watchdog attest via attest-only key (verified block #224553424)",
+      "tx": "JDbFM7w4k51GbajB5sWq1eFstWMw6F6WPd32yZvZu3f1",
+      "signer": "verifier"
+    },
+    {
+      "step": "watchdog attest via attest-only key (verified block #224553434)",
+      "tx": "4875GrQdkfjHDkR1D2aff9n6G5Gpt8x9RZc5J8gS81T4",
+      "signer": "verifier"
+    },
+    {
+      "step": "watchdog attest via attest-only key (verified block #224553441)",
+      "tx": "E5KbCDahHbJVXb717azP1xq8ULoCq8p6KFbq9ybreXNv",
+      "signer": "verifier"
+    },
+    {
+      "step": "watchdog attest via attest-only key (verified block #224553447)",
+      "tx": "nYMnZcyY3g6XStfzk9Ct7f1XGiUVqA46RFPtr83386P",
+      "signer": "verifier"
+    },
+    {
+      "step": "guardian auto-cancel via cancel-only key (17s into the freeze)",
+      "tx": "EDkq2kSMSGc9HiWfgzrSt3YTjRDpGtwB8yYGyHJC4XvD",
+      "signer": "sender"
+    }
+  ],
+  "keyScopeChecks": [
+    "watchdog key: transfer 0.001 NEAR -> rejected: Access key requires full access",
+    "watchdog key: call cancel -> rejected: Access key does not allow method cancel",
+    "guardian key: transfer 0.001 NEAR -> rejected: Access key requires full access",
+    "guardian key: call withdraw -> rejected: Access key does not allow method withdraw"
+  ],
+  "service": "paid service = NEAR mainnet RPC data provider (rpc.mainnet.fastnear.com), checked against archival-rpc.mainnet.fastnear.com"
+}

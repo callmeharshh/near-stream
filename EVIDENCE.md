@@ -1,9 +1,28 @@
 # Evidence
 
-Every row below is a real NEAR **testnet** transaction or on-chain read.
+Every row below is a real NEAR **mainnet** or **testnet** transaction or on-chain read.
 `npm run verify` (`scripts/verify-evidence.mjs`) re-checks all of it read-only and
 checks properties, not just existence (e.g. which key signed a tx, exact payout
-amounts, that a frozen stream stays frozen). Last run: **27/27 PASS**.
+amounts, that a frozen stream stays frozen). Last run: **32/32 PASS** (27 testnet + 5 mainnet).
+
+## NEAR mainnet (real NEAR)
+
+Contract: [`85401b220a3d58edb6f98a7ddbc48598ee373314ae17ae1399f7cf2462c45d98`](https://explorer.near.org/accounts/85401b220a3d58edb6f98a7ddbc48598ee373314ae17ae1399f7cf2462c45d98) (Rust build, `contract-rs/`).
+All transactions are in [`mainnet-evidence.json`](./mainnet-evidence.json); the verifier re-checks them.
+
+| What | Transaction |
+|---|---|
+| Rust contract deployed (148 KB → ~1.48 NEAR storage) | [`CY5LCufpyQ...`](https://explorer.near.org/transactions/CY5LCufpyQKjc1eKCQfryi8H1k9nmWHodZrdFmVt8JX3) |
+| Accounts funded (payer 0.16, watchdog 0.06, receiver 0.01 NEAR) | [`6e8XZD5znQ...`](https://explorer.near.org/transactions/6e8XZD5znQzoZZxfbZwyNTeLTZs4juSWy3b1Ktc3SjwB), [`FQTStXmPVv...`](https://explorer.near.org/transactions/FQTStXmPVvMbbHzpSgetTbTV8kttZK5F5GinYfbXnGVF), [`FfwfcjqBDZ...`](https://explorer.near.org/transactions/FfwfcjqBDZ5SzoUdGxo2kunNxY8Hq7FtxdJJoGNUjfBh) |
+| Attest-only key registered for the watchdog | [`2HgQVubX3t...`](https://explorer.near.org/transactions/2HgQVubX3tuzNPdsAsrDgo4JUGZ3nAQ6V61J71RYrpR9) |
+| Cancel-only key registered for the guardian | [`86sudXJP5d...`](https://explorer.near.org/transactions/86sudXJP5dMGvW5LzEA9ooj6vgswS8HXL5b8PMai56GQ) |
+| Stream 0 opened: 0.05 NEAR over 1h, gated on the watchdog, 20s heartbeat | [`12DSoYg1fE...`](https://explorer.near.org/transactions/12DSoYg1fEkrscMH9uxMP7odPVwogwygqk9Y6jH6L1h3) |
+| Watchdog verified real **mainnet** blocks (#224553373 onward) against a reference node and attested (10 times) | [`CnTZr75YgG...`](https://explorer.near.org/transactions/CnTZr75YgGw3frejgY89xQZRPxi5SBt46DX4CJAyzW41), [`Bwj8onEwfp...`](https://explorer.near.org/transactions/Bwj8onEwfp6Sypqim5fjeLY2fhNeRyDVdTraFZfA1oru), [`Ea5dvF3J6a...`](https://explorer.near.org/transactions/Ea5dvF3J6aFyDSPHPDa3YAHz1N9FQaKJ3vCmfzChF2Fu) … |
+| Service stalled (stale data, still HTTP 200) → watchdog stopped attesting → payout froze | watchdog log |
+| **Guardian auto-cancelled** 17s into the freeze; only verified time was paid (120s wall-clock, 44.7s verified) | [`EDkq2kSMSG...`](https://explorer.near.org/transactions/EDkq2kSMSGc9HiWfgzrSt3YTjRDpGtwB8yYGyHJC4XvD) |
+| Both agent keys tried to transfer NEAR / call other methods → **rejected by mainnet** | `Access key requires full access`, `does not allow method …` |
+
+## NEAR testnet
 
 Contract: [`near-stream-contract-1794591135.testnet`](https://explorer.testnet.near.org/accounts/near-stream-contract-1794591135.testnet)
 

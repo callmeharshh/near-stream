@@ -3,12 +3,13 @@
 **Pay AI agents and APIs per second, only while they're verifiably delivering.**
 
 Built at NEAR HACKATHON 2026 · Tracks: Real-World Money, Agent Economy,
-Autonomous Business, AI Security & Defense · Runs on NEAR **testnet**.
+Autonomous Business, AI Security & Defense · **Live on NEAR mainnet** (real NEAR) and testnet.
 
 | | |
 |---|---|
-| Live app (no install) | https://callmeharshh.github.io/near-stream/ |
-| Verify every on-chain claim (read-only) | `npm run verify` → **27/27 PASS** ([what it checks](./EVIDENCE.md)) |
+| **Mainnet contract** | [`85401b22…5d98`](https://explorer.near.org/accounts/85401b220a3d58edb6f98a7ddbc48598ee373314ae17ae1399f7cf2462c45d98): full agent flow ran with real NEAR ([transactions](./EVIDENCE.md#near-mainnet-real-near)) |
+| Live app (testnet, no install) | https://callmeharshh.github.io/near-stream/ |
+| Verify every on-chain claim (read-only) | `npm run verify` → **32/32 PASS** (incl. 5 mainnet checks) ([what it checks](./EVIDENCE.md)) |
 | Tests | `npm run install:all && npm test` → **29 passing** (+5 Rust: `cd contract-rs && cargo test`) |
 | All transactions | [`EVIDENCE.md`](./EVIDENCE.md) |
 | Design decisions & gotchas | [`DECISIONS.md`](./DECISIONS.md) |
@@ -54,11 +55,11 @@ the moment the work stops, and with agents running 24/7, nobody is watching.
 
 ## What's built and verified
 
-All on testnet, re-checked by `npm run verify`. Full transaction list in
-[`EVIDENCE.md`](./EVIDENCE.md).
+Re-checked by `npm run verify`. Full transaction list in [`EVIDENCE.md`](./EVIDENCE.md).
 
 | Feature | Proof |
 |---|---|
+| **The whole loop on mainnet, with real NEAR** | watchdog verified real mainnet blocks and attested with its attest-only key → service stalled → guardian auto-cancelled with its cancel-only key; 120s wall-clock, 44.7s verified, only verified time paid; both keys' theft attempts rejected by mainnet |
 | Per-second streams: create, withdraw, cancel | balances reconciled across contract, sender, receiver |
 | **Only verified time is paid** | stream 12: 166s of wall-clock time, 64.1s verified → provider paid 0.0641 NEAR; a 45s outage and the pre-attestation start were excluded (the old clock model would have paid ~0.166) |
 | Real service, checked for correctness | watchdog verified live NEAR blocks against a reference RPC; rejected stale data, a forged block hash, and future timestamps |
@@ -109,7 +110,7 @@ fit on the payer's side (funding streams from an Agent API wallet); that is **no
 ```bash
 npm run install:all
 npm test          # 29 unit tests (verified-time accounting, k-of-n, delivery check, agents)
-npm run verify    # re-checks 27 on-chain claims, read-only
+npm run verify    # re-checks 32 on-chain claims (testnet + mainnet), read-only
 ```
 Or open the [live app](https://callmeharshh.github.io/near-stream/): it reads the
 real contract; stream #6 keeps ticking until Nov 19.
@@ -139,11 +140,11 @@ scripts/    verify-evidence.mjs (read-only verifier), mainnet-setup.mjs (deploy 
 
 ## Honest limitations
 
-- **Testnet only (so far).** The JS contract would need ~5.6 NEAR of storage on
-  mainnet; the Rust port (`contract-rs/`) needs ~1.48. `scripts/mainnet-setup.mjs`
-  deploys the Rust build plus accounts and agent keys in one command; the full flow
-  (deploy, both agents, auto-cancel) was rehearsed on testnet with exactly 1.85 NEAR.
-  The Rust port covers native-NEAR streams only; token streams are in the JS contract.
+- **Mainnet runs the Rust port, native NEAR only.** The JS contract would need ~5.6
+  NEAR of storage on mainnet; the Rust port (`contract-rs/`) needs ~1.48, so mainnet
+  uses it (deployed with `scripts/mainnet-setup.mjs`, rehearsed twice on testnet with
+  exactly 1.85 NEAR first). Token (NEP-141) streams are only in the JS contract on
+  testnet. The mainnet run used small amounts (a 0.05 NEAR stream).
 - **Token streams were proven with wNEAR, not USDC.** We couldn't mint testnet
   USDC; the code is token-agnostic NEP-141, so USDC uses the same calls.
 - **What the watchdog can verify is domain-specific.** For the demo's RPC service it
@@ -165,9 +166,9 @@ scripts/    verify-evidence.mjs (read-only verifier), mainnet-setup.mjs (deploy 
 
 ## Roadmap (not built)
 
-Paid verification (a share of each stream for the watchdogs that attested), a Rust
-port of the contract to cut gas, mainnet with USDC, and Agent API wallets on the
-payer side.
+Paid verification (a share of each stream for the watchdogs that attested), token
+(USDC) streams in the Rust contract so they can run on mainnet too, and Agent API
+wallets on the payer side.
 
 ## Disclosures
 

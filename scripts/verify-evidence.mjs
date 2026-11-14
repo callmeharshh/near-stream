@@ -10,8 +10,8 @@ const WATCHDOG_KEY = "ed25519:7f5SKkkXzjvvsNbVc2wws62QFkpQHTHbgAyPuytcXbUg";
 const GUARDIAN_KEY = "ed25519:ByaLcyWJrG6qrNiAicC7jjW6NZHVd1EuDNhAFcbdxnwU";
 const GUARDIAN_CANCEL_TX = "4pq5Hmd2WCvWhjU9xGWafmxHTjiozd5518oBsUFF49D4";
 
-async function rpc(method, params) {
-  const res = await fetch(RPC, {
+async function rpc(method, params, url = RPC) {
+  const res = await fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
@@ -212,6 +212,63 @@ check("ungated live stream 6 accrues in real time (two reads 4s apart)", async (
   return b > a;
 });
 
+// ---------------- NEAR MAINNET (Rust contract, deployed with real NEAR) ----------------
+const MAINNET_RPC = "https://rpc.mainnet.fastnear.com";
+const { readFileSync: readFile } = await import("node:fs");
+const MAIN = JSON.parse(readFile(new URL("../mainnet-evidence.json", import.meta.url), "utf8"));
+const mrpc = (method, params) => rpc(method, params, MAINNET_RPC);
+const mview = async (methodName, args) => {
+  const r = await mrpc("query", {
+    request_type: "call_function",
+    finality: "final",
+    account_id: MAIN.accounts.contract,
+    method_name: methodName,
+    args_base64: Buffer.from(JSON.stringify(args)).toString("base64"),
+  });
+  return JSON.parse(Buffer.from(r.result).toString());
+};
+const mtx = async (hash, signerRole) =>
+  mrpc("tx", { tx_hash: hash, sender_account_id: MAIN.accounts[signerRole ?? "contract"], wait_until: "NONE" });
+const signerOf = (step) =>
+  step.signer ?? (/attest-only watchdog key/.test(step.step) ? "verifier" : /guardian key|create_stream/.test(step.step) ? "sender" : "contract");
+
+check(`MAINNET: contract deployed at ${MAIN.accounts.contract.slice(0, 10)}…`, async () => {
+  const a = await mrpc("query", { request_type: "view_account", finality: "final", account_id: MAIN.accounts.contract });
+  return a.code_hash !== "11111111111111111111111111111111";
+});
+
+check(`MAINNET: all ${MAIN.steps.length} recorded transactions succeeded (deploy, funding, keys, stream, attests, auto-cancel)`, async () => {
+  for (const step of MAIN.steps) if (!succeeded(await mtx(step.tx, signerOf(step)))) return false;
+  return true;
+});
+
+check("MAINNET: watchdog key is attest-only and guardian key is cancel-only, on this contract only", async () => {
+  const scope = async (account_id, public_key) =>
+    (await mrpc("query", { request_type: "view_access_key", finality: "final", account_id, public_key })).permission?.FunctionCall;
+  const w = await scope(MAIN.accounts.verifier, MAIN.watchdogKey);
+  const g = await scope(MAIN.accounts.sender, MAIN.guardianKey);
+  return (
+    w?.receiver_id === MAIN.accounts.contract && w.method_names.join() === "attest" &&
+    g?.receiver_id === MAIN.accounts.contract && g.method_names.join() === "cancel"
+  );
+});
+
+check("MAINNET: attests were signed by the watchdog key; the cancel by the guardian key", async () => {
+  for (const step of MAIN.steps) {
+    if (/watchdog attest/.test(step.step) && (await mtx(step.tx, "verifier")).transaction.public_key !== MAIN.watchdogKey) return false;
+    if (/guardian auto-cancel/.test(step.step) && (await mtx(step.tx, "sender")).transaction.public_key !== MAIN.guardianKey) return false;
+  }
+  return MAIN.steps.some((s) => /guardian auto-cancel/.test(s.step));
+});
+
+check("MAINNET: stream 0 paid only verified time (outage excluded), then was closed by the guardian", async () => {
+  const s = await mview("get_stream", { stream_id: 0 });
+  const wall = BigInt(s.settledAt) - BigInt(s.startTime);
+  const verified = BigInt(s.verifiedNanos);
+  const expected = (BigInt(s.totalAmount) * verified) / (BigInt(s.durationSeconds) * 1_000_000_000n);
+  return s.closed && verified + 30_000_000_000n < wall && BigInt(s.withdrawn) === expected;
+});
+
 let failed = 0;
 for (const { name, fn } of checks) {
   let ok = false;
@@ -224,5 +281,5 @@ for (const { name, fn } of checks) {
   if (!ok) failed += 1;
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}${note}`);
 }
-console.log(`\n${checks.length - failed}/${checks.length} passed against ${RPC}`);
+console.log(`\n${checks.length - failed}/${checks.length} passed (testnet: ${RPC}, mainnet: ${MAINNET_RPC})`);
 process.exit(failed ? 1 : 0);

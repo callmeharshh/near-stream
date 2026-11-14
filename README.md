@@ -3,6 +3,18 @@
 Built for **NEAR HACKATHON 2026**, tracks: **Real-World Money**, **Agent
 Economy**, **AI Security & Defense**.
 
+> **Pay agents and APIs per second, only while they deliver.** An autonomous
+> watchdog attests on-chain while work is really happening; when it stops,
+> payment freezes by itself. The watchdog's NEAR key can call `attest` and
+> nothing else, so even a hacked watchdog can't move a coin.
+
+| | |
+|---|---|
+| **Live app** (testnet, no install) | **https://callmeharshh.github.io/near-stream/** — stream #6 ticks live through Nov 19 |
+| **Verify every claim** (read-only, ~10s) | `node scripts/verify-evidence.mjs` → **16/16 PASS** |
+| **All tests** | `npm run install:all && npm test` → 13 passing (8 contract math, 5 agent check) |
+| **Demo script** | [`DEMO.md`](./DEMO.md) |
+
 Lump-sum payroll and invoicing require trust: the payer has to trust the payee
 delivered before paying, or the payee has to trust the payer will pay at all.
 NEAR Stream removes that by streaming NEAR continuously, second by second,
@@ -120,6 +132,12 @@ sender, receiver) — not just checked via a success/failure status:
 That last one is the actual proof of the circuit-breaker claim: the sender was
 protected from paying for ~15 unverified seconds, recovering 95% of the stream
 instead of the ~80% a plain linear split would have given back.
+
+`node scripts/verify-evidence.mjs` re-checks all of this read-only. It doesn't
+just confirm the transactions exist: it checks the *properties*. Examples: the
+stalled cancel paid out exactly the frozen 0.025 NEAR; stream 3 is still frozen
+below its total long after its duration ended; and each watchdog `attest` was
+signed by the attest-only key.
 
 ### The autonomous watchdog, verified
 

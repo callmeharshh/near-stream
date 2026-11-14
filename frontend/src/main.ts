@@ -22,7 +22,7 @@ let statusMessage = "";
 let busyStreamId: number | null = null;
 
 function near(amountYocto: string): string {
-  return `${formatNearAmount(amountYocto, 4)} NEAR`;
+  return `${formatNearAmount(amountYocto, 6)} NEAR`;
 }
 
 function heartbeatOf(stream: RawStream): Heartbeat {

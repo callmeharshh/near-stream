@@ -71,6 +71,13 @@ that scope itself. Tested on testnet: the key's attempts to transfer NEAR
 all rejected by the chain. A stolen watchdog key can at worst keep a stream alive
 that should freeze. It can never move money.
 
+The verifier *account* still has a full-access key, but that key lives only in the
+operator's local keychain and is never given to the watchdog. The watchdog host's
+`.env` holds only the attest-only key. Deleting the full-access key would make the
+account permanently unmanageable (no way to rotate the watchdog key); for a
+production verifier you'd keep it on a hardware wallet. The verifier script checks
+that every watchdog transaction was signed by the attest-only key specifically.
+
 ## The delivery check is deterministic; no LLM in the attest path
 
 `agent/check.mjs` attests only on fresh, well-formed, progressing output. An LLM

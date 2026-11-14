@@ -18,7 +18,8 @@ export function checkDelivery(body, nowMs, lastSequence, maxStalenessMs) {
 // Agent error handling. Permanent contract errors stop the loop (retrying would only
 // burn the key's gas allowance); transient RPC failures (e.g. 429 rate limits) back off
 // exponentially, capped at 60s, and reset after the next success.
-const PERMANENT = /Stream already closed|does not exist|Only the configured verifier|Only the sender/;
+// Out-of-gas and allowance errors are permanent too: retrying the same call can't succeed and only burns gas.
+const PERMANENT = /Stream already closed|does not exist|Only the configured verifier|Only the sender|Exceeded the prepaid gas|Not enough allowance/;
 
 export function classifyError(message) {
   return PERMANENT.test(message) ? "permanent" : "transient";

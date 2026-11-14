@@ -18,7 +18,7 @@ const { Account, KeyPair, JsonRpcProvider, parseNearAmount, formatNearAmount } =
 // DRY_RUN=1 runs the identical flow on testnet with separate keys/evidence files.
 const DRY_RUN = process.env.DRY_RUN === "1";
 const RPC = DRY_RUN ? "https://test.rpc.fastnear.com" : "https://rpc.mainnet.fastnear.com";
-const DIR = join(homedir(), DRY_RUN ? ".near-stream-testnet-dryrun" : ".near-stream-mainnet");
+const DIR = DRY_RUN && process.env.DRY_RUN_DIR ? process.env.DRY_RUN_DIR : join(homedir(), DRY_RUN ? ".near-stream-testnet-dryrun" : ".near-stream-mainnet");
 const KEYS = join(DIR, "keys.json");
 const EVIDENCE = DRY_RUN
   ? join(DIR, "evidence.json")
@@ -91,7 +91,7 @@ if (command === "keys") {
   const ids = Object.fromEntries(Object.entries(keys).map(([r, k]) => [r, k.accountId]));
   writeFileSync(EVIDENCE, JSON.stringify({ network: DRY_RUN ? "testnet" : "mainnet", accounts: ids, watchdogKey: keys.watchdog.publicKey, steps: [] }, null, 2));
 
-  for (const [role, near] of [["sender", "0.15"], ["verifier", "0.3"], ["receiver", "0.01"]]) {
+  for (const [role, near] of [["sender", "0.4"], ["verifier", "0.3"], ["receiver", "0.01"]]) {
     const r = await contract.transfer({ receiverId: keys[role].accountId, amount: parseNearAmount(near) });
     record({ step: `fund ${role} with ${near} NEAR`, tx: hashOf(r) });
   }
@@ -113,7 +113,8 @@ if (command === "keys") {
     publicKey: keys.guardian.publicKey,
     contractId: keys.contract.accountId,
     methodNames: ["cancel"],
-    allowance: parseNearAmount("0.05"),
+    // allowance is checked against the full prepaid gas at a pessimistic price (~0.1 NEAR per 100 Tgas cancel)
+    allowance: parseNearAmount("0.5"),
   });
   record({ step: "register cancel-only guardian key on sender", tx: hashOf(guardianKeyTx) });
 

@@ -6,6 +6,8 @@ test("agent errors: closed/missing streams and permission errors are permanent; 
   assert.equal(classifyError("Smart contract panicked: Stream already closed"), "permanent");
   assert.equal(classifyError("Smart contract panicked: Stream 4 does not exist"), "permanent");
   assert.equal(classifyError("Only the configured verifier can attest to this stream"), "permanent");
+  assert.equal(classifyError("Exceeded the prepaid gas."), "permanent");
+  assert.equal(classifyError("Not enough allowance for access key ed25519:abc"), "permanent");
   assert.equal(classifyError("429 Too Many Requests"), "transient");
   assert.equal(classifyError("fetch failed"), "transient");
 });
